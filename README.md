@@ -19,16 +19,24 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 **Logging**
 - Access log: `/var/log/nginx/service-env-access.log`, written as one JSON object per request (`timestamp`, `request_id`, `method`, `path`, `status`, `upstream`, `request_time`), matching the logging contract.
 - Error log: `/var/log/nginx/service-env-error.log`.
+- Known caveat: Nginx's `$time_iso8601` logs in the process's local timezone (e.g. `+03:00`), while the services log UTC (`Z`). Logs still correlate correctly via `request_id` regardless, but for side-by-side reading the timezone won't match. Fixing it means setting `TZ=UTC` on the Nginx process itself (a systemd `Environment=` line or `/etc/default/nginx`) — not something `service-env.conf` can control.
 
 **Network security**
-- Service B (3002) and Service C (3003) are not exposed by this proxy at all — protection at the Nginx layer is "no route exists," independent of whatever firewall/bind-address rules are applied directly on those services' systemd units.
+- Service B (3002) and Service C (3003) are not exposed by this proxy at all — there is no `location` block that forwards to them, so Nginx has no path by which it could reach them even if asked to.
+- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. The actual protection against that is B/C binding to `127.0.0.1` (not `0.0.0.0`) plus a host firewall (e.g. `ufw`) blocking 3002/3003 from outside. **That enforcement lives outside this config** — whoever owns the systemd units / firewall rules for Service B and C needs to confirm it's in place. See "Verify" below for the test that actually checks it.
 
 **Deploy**
 ```
-# Disable the distro's default site - it ships with `server_name localhost`
-# and will shadow our config for any request with a "Host: localhost" header.
+# 1. Service discovery must exist *before* Nginx starts - it resolves
+#    upstream hostnames at config-load time and will refuse to start
+#    with "host not found in upstream" if /etc/hosts isn't populated yet.
+sudo ./scripts/hosts-setup.sh
+
+# 2. Disable the distro's default site - it ships with `server_name localhost`
+#    and will shadow our config for any request with a "Host: localhost" header.
 sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
 
+# 3. Deploy our config.
 sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
 sudo nginx -t
 sudo systemctl reload nginx
@@ -36,6 +44,13 @@ sudo systemctl reload nginx
 
 **Verify**
 ```
-curl -i http://localhost/service-a/health
-curl -i http://localhost/service-b   # expect 404 - not routable
+# Through Nginx - only Service A should answer:
+curl -i http://localhost/service-a/health      # expect 200
+curl -i http://localhost/service-b              # expect Nginx's JSON 404 (proves no route exists in Nginx)
+
+# Direct to the ports, bypassing Nginx entirely - this is the real network-security
+# test the instructor will run, from off-box / using the VM's public IP:
+curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection refused / timeout
+curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection refused / timeout
 ```
+If either of the last two return a response instead of timing out, Nginx is not the problem — it means B/C are bound to `0.0.0.0` and/or no firewall rule blocks the port, which is outside this config's control.
