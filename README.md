@@ -1,6 +1,70 @@
 # production-service-env
 A production-style microservices environment with Nginx reverse proxy, systemd lifecycle management, structured logging, and request tracing.
 
+## Overview
+
+Three independent Python/Flask HTTP services sit behind an Nginx reverse proxy. Only **Service A** is public (through Nginx on port 80); **Service B** and **Service C** are internal-only. A single request flows through all of them and is traceable end to end by a shared `X-Request-ID`:
+
+```
+Client → Nginx (:80) → Service A (:3001) → Service B (:3002) → Service C (:3003) → Service A callback
+```
+
+| Component | Port | Public? | Role |
+|-----------|------|---------|------|
+| Nginx | 80 | yes | Reverse proxy; the only public entry point |
+| Service A | 3001 | via Nginx only | Entry point; calls B; receives C's callback |
+| Service B | 3002 | internal | Receives from A; forwards to C |
+| Service C | 3003 | internal | Processes; calls back to A |
+
+## Prerequisites
+
+These are **Linux + systemd** services, so they run on an Ubuntu host or VM (not natively on macOS/Windows). You need:
+- Ubuntu 22.04+ (or similar systemd-based Linux)
+- `python3` + `python3-venv`, `nginx`, `curl`, `git`
+- `sudo`/root access (for `/opt`, systemd units, `/etc/hosts`, and Nginx)
+
+**Running locally on macOS/Windows?** Use a small Ubuntu VM. With [Multipass](https://multipass.run):
+```
+multipass launch --name service-env 22.04
+multipass shell service-env        # everything below runs inside the VM
+multipass info service-env         # note the IPv4 — used for the network-security test
+```
+
+## Quick Start (run it locally, top to bottom)
+
+Run these inside the Ubuntu host/VM. Each block is detailed in its own section further down.
+
+```
+# 1. Get the code
+sudo apt update && sudo apt install -y python3-venv nginx curl git
+git clone https://github.com/nebyathhailu/production-service-env.git
+cd production-service-env
+
+# 2. Deploy the services (creates /opt/service-env, venv, serviceenv user, systemd units)
+sudo mkdir -p /opt/service-env
+sudo cp -r services requirements.txt /opt/service-env/
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin serviceenv || true
+sudo python3 -m venv /opt/service-env/venv
+sudo /opt/service-env/venv/bin/pip install -r /opt/service-env/requirements.txt
+sudo chown -R serviceenv:serviceenv /opt/service-env
+sudo ./scripts/hosts-setup.sh                       # service discovery (/etc/hosts) — must run first
+sudo cp systemd/service-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now service-b service-c service-a
+
+# 3. Deploy Nginx
+sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
+sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 4. Smoke test — health, the full chain, and that B/C aren't routable
+curl -s http://localhost/service-a/health ; echo
+curl -s http://localhost/service-a/greet-service-b ; echo        # -> "status":"success"
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b   # -> 404
+```
+
+If all three services are `active` and the chain returns `"status":"success"`, the system is up. See **Verify lifecycle**, **Verify** (Nginx), and the per-section detail below for the full validation, request-tracing, and failure-drill steps.
+
 ## Services & systemd Lifecycle (`systemd/*.service`)
 
 The three Python/Flask services run as systemd units so they start on boot, restart on failure, log to journald, and honour the A→depends-on→B,C ordering.
