@@ -5,7 +5,14 @@
 #   Service A must not start before Service B and Service C, and must not
 #   become operational until both are actually reachable.
 #     - After=        -> ordering: A starts after B and C units have started.
-#     - Requires=     -> if B or C fails to start, A is not started either.
+#     - Wants=        -> pulls B/C in as a startup preference (paired with
+#                        After= above). Deliberately not Requires=: Requires=
+#                        propagates *deactivation* too, so if B or C is later
+#                        stopped/crashes, A would be torn down with it - taking
+#                        the public entry point down along with one internal
+#                        dependency. Wants= keeps the startup ordering without
+#                        that runtime coupling, so A stays up and its own
+#                        error handling deals with a downstream outage.
 #     - ExecStartPre= -> readiness gate: A blocks until B and C answer their
 #                        /health endpoints (ordering alone only guarantees the
 #                        processes were launched, not that they are listening).
@@ -18,7 +25,7 @@ Description=Service A (public entry point, port 3001)
 Documentation=https://github.com/nebyathhailu/production-service-env
 After=network-online.target service-b.service service-c.service
 Wants=network-online.target
-Requires=service-b.service service-c.service
+Wants=service-b.service service-c.service
 # Allow several quick retries (e.g. while deps are still coming up) before
 # systemd gives up, instead of tripping the default start-limit throttle.
 StartLimitIntervalSec=120
