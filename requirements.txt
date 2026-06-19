@@ -1,0 +1,3 @@
+# Shared dependencies for all three services (service-a, service-b, service-c).
+flask>=3.0,<4.0
+requests>=2.31,<3.0

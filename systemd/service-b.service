@@ -1,0 +1,44 @@
+# Service B - internal greeting forwarder (port 3002).
+# Internal-only: binds to 127.0.0.1 so it is unreachable from off-box.
+#
+# Install:  sudo cp systemd/service-b.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now service-b
+[Unit]
+Description=Service B (internal greeting forwarder, port 3002)
+Documentation=https://github.com/nebyathhailu/production-service-env
+# Don't start until the network (and thus loopback/name resolution) is up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=serviceenv
+Group=serviceenv
+WorkingDirectory=/opt/service-env/services/service-b
+ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/service-b/app.py
+
+# Configuration. These match the in-code defaults; set here so an operator can
+# retune ports/discovery centrally without editing source.
+Environment=SERVICE_B_PORT=3002
+Environment=BIND_HOST=127.0.0.1
+Environment=SERVICE_C_URL=http://service-c.internal:3003
+Environment=DOWNSTREAM_TIMEOUT=5
+
+# Restart automatically after a crash/kill (but not after a manual `stop`).
+Restart=on-failure
+RestartSec=2
+
+# Structured JSON on stdout goes straight to journald under this identifier.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=service-b
+
+# Hardening (defense in depth; also the "additional security controls" bonus).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

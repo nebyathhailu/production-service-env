@@ -1,6 +1,84 @@
 # production-service-env
 A production-style microservices environment with Nginx reverse proxy, systemd lifecycle management, structured logging, and request tracing.
 
+## Services & systemd Lifecycle (`systemd/*.service`)
+
+The three Python/Flask services run as systemd units so they start on boot, restart on failure, log to journald, and honour the A→depends-on→B,C ordering.
+
+**Deployment layout**
+- Code: `/opt/service-env/services/service-{a,b,c}/`
+- Shared virtualenv: `/opt/service-env/venv/`
+- Runs as the unprivileged system user `serviceenv` (no login, no home) — keeps services off `root` and lets the unit hardening (`ProtectHome`, `ProtectSystem`) apply.
+
+**Dependency management** (assignment requirement: A must not start before B and C, and must not become operational until they are available)
+- `service-a.service` declares `After=service-b.service service-c.service` and `Requires=service-b.service service-c.service` — ordering + "won't start if a dep failed to start."
+- It also has an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
+
+**Install / first deploy** (run as root on the VM)
+```
+# 0. Get the code onto the box and into the standard location.
+sudo mkdir -p /opt/service-env
+sudo cp -r services requirements.txt /opt/service-env/
+
+# 1. Dedicated unprivileged service account.
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin serviceenv || true
+
+# 2. Shared virtualenv + dependencies (Flask + requests).
+sudo python3 -m venv /opt/service-env/venv
+sudo /opt/service-env/venv/bin/pip install -r /opt/service-env/requirements.txt
+sudo chown -R serviceenv:serviceenv /opt/service-env
+
+# 3. Service discovery must exist BEFORE the services start (they resolve
+#    *.internal names at request time; Service A's readiness gate needs it too).
+sudo ./scripts/hosts-setup.sh
+
+# 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
+#    but enable all three so each comes back independently on reboot.
+sudo cp systemd/service-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now service-b service-c service-a
+```
+
+**Operation** (standard Linux service commands)
+```
+# Status / health
+systemctl status service-a service-b service-c
+sudo systemctl is-active service-a
+
+# Start / stop / restart
+sudo systemctl start  service-a
+sudo systemctl stop   service-a
+sudo systemctl restart service-a
+
+# Stop everything / bring it all back
+sudo systemctl stop  service-a service-b service-c
+sudo systemctl start service-b service-c service-a   # order matters: deps first
+```
+
+**Logs** (structured JSON via journald)
+```
+journalctl -u service-a -f                 # follow one service
+journalctl -u service-a -u service-b -u service-c --since "10 min ago"
+journalctl -u service-a -o cat | grep '"request_id":"<id>"'   # trace one request
+```
+
+**Verify lifecycle**
+```
+# Boot/reboot recovery: after `sudo reboot`, all three should be active:
+systemctl is-enabled service-a service-b service-c   # -> enabled
+systemctl is-active  service-a service-b service-c   # -> active
+
+# Auto-restart after failure: kill the process, it should respawn within ~2s.
+sudo systemctl kill -s SIGKILL service-b
+sleep 3; systemctl is-active service-b               # -> active (new PID)
+
+# Dependency gate: stop a dependency, then A should refuse to start cleanly.
+sudo systemctl stop service-b
+sudo systemctl restart service-a                     # blocks on readiness gate, then fails
+journalctl -u service-a -n 20                        # shows "dependencies ... not ready"
+sudo systemctl start service-b && sudo systemctl start service-a   # recovers
+```
+
 ## Nginx Reverse Proxy (`nginx/service-env.conf`)
 
 Nginx is the only publicly reachable component. It listens on port 80 and exposes **Service A only**.
