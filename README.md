@@ -75,8 +75,9 @@ The three Python/Flask services run as systemd units so they start on boot, rest
 - Runs as the unprivileged system user `serviceenv` (no login, no home) — keeps services off `root` and lets the unit hardening (`ProtectHome`, `ProtectSystem`) apply.
 
 **Dependency management** (assignment requirement: A must not start before B and C, and must not become operational until they are available)
-- `service-a.service` declares `After=service-b.service service-c.service` and `Requires=service-b.service service-c.service` — ordering + "won't start if a dep failed to start."
-- It also has an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
+- `service-a.service` declares `After=service-b.service service-c.service` (ordering) and `Wants=service-b.service service-c.service` (best-effort pull-in at start).
+- The real enforcement is an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A and **fails A's start if they don't answer**. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
+- We deliberately use `Wants=`, not `Requires=`/`BindsTo=`. Those propagate **deactivation**, so `systemctl stop service-b` would cascade and stop Service A. We want the opposite at runtime: A stays up and **degrades gracefully** — its calls to B return `502` with a structured `request_failed` log — rather than disappearing. (See the "Verify lifecycle" drill below.)
 
 **Install / first deploy** (run as root on the VM)
 ```
@@ -136,11 +137,22 @@ systemctl is-active  service-a service-b service-c   # -> active
 sudo systemctl kill -s SIGKILL service-b
 sleep 3; systemctl is-active service-b               # -> active (new PID)
 
-# Dependency gate: stop a dependency, then A should refuse to start cleanly.
+# Runtime dependency failure -> A STAYS UP and degrades gracefully.
+# (Wants=, not Requires=, so stopping B does NOT cascade-stop A.)
 sudo systemctl stop service-b
-sudo systemctl restart service-a                     # blocks on readiness gate, then fails
+systemctl is-active service-a                        # -> active (not cascaded down)
+curl -s http://localhost/service-a/greet-service-b   # -> {"status":"error",...} (502)
+journalctl -u service-a -n 20 -o cat                 # shows the structured request_failed log
+sudo systemctl start service-b                       # re-run the curl -> "status":"success"
+
+# Startup readiness gate -> A won't go operational until deps are healthy.
+# Mask B so Wants= can't auto-start it, then start A: the gate waits ~30s, fails.
+sudo systemctl stop service-a
+sudo systemctl mask --now service-b
+sudo systemctl start service-a                       # blocks on the gate, then fails to start
 journalctl -u service-a -n 20                        # shows "dependencies ... not ready"
-sudo systemctl start service-b && sudo systemctl start service-a   # recovers
+sudo systemctl unmask service-b
+sudo systemctl start service-b service-a             # recovers
 ```
 
 ## Nginx Reverse Proxy (`nginx/service-env.conf`)
