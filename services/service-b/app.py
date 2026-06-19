@@ -1,0 +1,108 @@
+from flask import Flask, jsonify, request
+import json
+import logging
+import os
+import sys
+import uuid
+from datetime import datetime, timezone
+
+import requests
+
+# Silence Werkzeug's unstructured access log; we emit our own structured JSON.
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+# Configuration (overridable via environment variables for systemd/deployment).
+SERVICE_NAME = "service-b"
+PORT = int(os.environ.get("SERVICE_B_PORT", "3002"))
+BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
+SERVICE_C_URL = os.environ.get("SERVICE_C_URL", "http://service-c.internal:3003").rstrip("/")
+DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
+
+app = Flask(__name__)
+
+
+def iso_now():
+    """Current UTC time as an ISO-8601 string with a trailing Z."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(event, request_id, path, status, **extra):
+    """Emit one structured JSON log line to stdout (captured by journald)."""
+    entry = {
+        "timestamp": iso_now(),
+        "service": SERVICE_NAME,
+        "event": event,
+        "request_id": request_id,
+        "path": path,
+        "status": status,
+    }
+    entry.update(extra)
+    sys.stdout.write(json.dumps(entry) + "\n")
+    sys.stdout.flush()
+
+
+def request_id():
+    """Use the incoming X-Request-ID, or mint one so the trace never breaks."""
+    return request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+
+# Health check endpoint for liveness probes and validation commands.
+@app.get("/health")
+def health():
+    rid = request_id()
+    log("health_check", rid, request.path, 200, method=request.method)
+    return jsonify(
+        service=SERVICE_NAME,
+        status="healthy",
+        port=PORT,
+        message=f"Hello {SERVICE_NAME} listening on {PORT}",
+    ), 200
+
+
+# Receive a request from Service A and forward it to Service C (propagating the trace id).
+@app.get("/greet")
+def greet():
+    rid = request_id()
+    log("request_received", rid, request.path, 200, method=request.method)
+    target_url = f"{SERVICE_C_URL}/greet-c"
+    try:
+        resp = requests.get(
+            target_url,
+            headers={"X-Request-ID": rid},  
+            timeout=DOWNSTREAM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        log("request_forwarded", rid, request.path, 200, method=request.method,
+            target="service-c", downstream_status=resp.status_code)
+        return jsonify(request_id=rid, status="forwarded", target="service-c"), 200
+    except requests.HTTPError as e:
+        log("request_failed", rid, request.path, 502, method=request.method,
+            target="service-c", error=f"downstream_http_{e.response.status_code}")
+        return jsonify(request_id=rid, status="error", error="downstream_error"), 502
+    except requests.RequestException as e:
+        log("request_failed", rid, request.path, 502, method=request.method,
+            target="service-c", error="downstream_unreachable", detail=str(e))
+        return jsonify(request_id=rid, status="error", error="downstream_unreachable"), 502
+
+
+# Unknown routes return 404 with a structured log entry for troubleshooting.
+@app.errorhandler(404)
+def not_found(_e):
+    rid = request_id()
+    log("route_not_found", rid, request.path, 404, method=request.method)
+    return jsonify(request_id=rid, status="error", error="route_not_found",
+                   path=request.path), 404
+
+
+@app.after_request
+def add_request_id_header(resp):
+    """Echo the trace id back on every response."""
+    resp.headers.setdefault("X-Request-ID", request_id())
+    return resp
+
+
+# Entry point: start the threaded server on the configured host/port.
+if __name__ == "__main__":
+    log("service_started", "-", "-", 200,
+        bind_host=BIND_HOST, port=PORT, downstream=SERVICE_C_URL)
+    app.run(host=BIND_HOST, port=PORT, threaded=True)
