@@ -102,6 +102,10 @@ sudo chown -R serviceenv:serviceenv /opt/service-env
 #    *.internal names at request time; Service A's readiness gate needs it too).
 sudo ./scripts/hosts-setup.sh
 
+# 3b. Firewall: defense-in-depth backstop for B/C's bind-address protection.
+#     Allows only SSH (22) and Nginx's HTTP (80) in; everything else denied.
+sudo ./scripts/firewall-setup.sh
+
 # 4. Install and enable the units. Enabling A pulls in B and C via Wants=,
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
@@ -199,7 +203,10 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 
 **Network security**
 - Service B (3002) and Service C (3003) are not exposed by this proxy at all — there is no `location` block that forwards to them, so Nginx has no path by which it could reach them even if asked to.
-- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. The actual protection against that is B/C binding to `127.0.0.1` (not `0.0.0.0`) plus a host firewall (e.g. `ufw`) blocking 3002/3003 from outside. **That enforcement lives outside this config** — whoever owns the systemd units / firewall rules for Service B and C needs to confirm it's in place. See "Verify" below for the test that actually checks it.
+- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. Two independent layers actually enforce that:
+  1. **Bind-address**: B and C bind to `127.0.0.1`, not `0.0.0.0` (set via `BIND_HOST` in their systemd units), so nothing outside the VM can reach those ports regardless of firewall state.
+  2. **Firewall (`scripts/firewall-setup.sh`, `ufw`)**: default-deny on incoming, with only SSH (22) and Nginx's HTTP (80) explicitly allowed. This is the backstop for layer 1 — if `BIND_HOST` ever drifts to `0.0.0.0` by accident, the firewall still blocks external access instead of silently exposing B/C.
+- Run `sudo ./scripts/firewall-setup.sh` once per VM to apply this. See "Verify" below for the test that checks both layers are actually working, not just configured.
 
 **Deploy**
 ```
@@ -226,7 +233,17 @@ curl -i http://localhost/service-b              # expect Nginx's JSON 404 (prove
 
 # Direct to the ports, bypassing Nginx entirely - this is the real network-security
 # test the instructor will run, from off-box / using the VM's public IP:
-curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection refused / timeout
-curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection refused / timeout
+curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection timed out (ufw dropping it)
+curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection timed out (ufw dropping it)
+
+# Confirm the firewall itself is the active layer (not just bind-address):
+sudo ufw status verbose                          # expect: active, default deny (incoming),
+                                                  #   only 22/tcp and 80/tcp explicitly allowed
 ```
-If either of the last two return a response instead of timing out, Nginx is not the problem — it means B/C are bound to `0.0.0.0` and/or no firewall rule blocks the port, which is outside this config's control.
+If either of the `curl` commands return a response instead of timing out, something regressed — either B/C started binding to `0.0.0.0` instead of `127.0.0.1`, or `ufw` is inactive (`sudo ufw status`). If you only get "connection refused" instead of "timed out," the firewall isn't active and you're seeing bind-address-only protection — re-run `sudo ./scripts/firewall-setup.sh`.
+
+**One-shot sanity check**
+```
+./scripts/test-end-to-end.sh
+```
+Runs five assertions in one go - Service A health, the full A→B→C→A flow, Service B/C not routable through Nginx, and structured JSON 404s on unknown routes - and exits non-zero if anything fails. Good to run right after deploying, after a reboot, or right before the demo.
