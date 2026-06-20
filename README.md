@@ -97,7 +97,7 @@ sudo chown -R serviceenv:serviceenv /opt/service-env
 #    *.internal names at request time; Service A's readiness gate needs it too).
 sudo ./scripts/hosts-setup.sh
 
-# 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
+# 4. Install and enable the units. Enabling A pulls in B and C via Wants=,
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
