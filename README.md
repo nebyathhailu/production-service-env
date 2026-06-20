@@ -41,6 +41,8 @@ git clone https://github.com/nebyathhailu/production-service-env.git
 cd production-service-env
 
 # 1b. Pre-flight: make sure ports 3001/3002/3003 are free. If a previous run
+#     left a manual `python app.py` behind, systemd can't bind and you'll see
+#     "Service B unreachable". Empty output here = good, you're clear to deploy.
 sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'
 pkill -f 'services/service-.\?/app.py' || true     # clear any stray manual runs
 
@@ -68,7 +70,18 @@ curl -s http://localhost/service-a/greet-service-b ;         # -> "status":"succ
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b   # -> 404
 ```
 
-If all three services are `active` and the chain returns `"status":"success"`, the system is up. See **Verify lifecycle**, **Verify** (Nginx), and the per-section detail below for the full validation, request-tracing, and failure-drill steps.
+If all three services are `active` and the chain returns `"status":"success"`, **the system is fully deployed — you only run the Quick Start once.**
+
+### What to read next (and what each part tests)
+
+Everything below is **explanation and tests, not setup to repeat.** The "Install / first deploy" and Nginx "Deploy" blocks in those sections are the *same commands you just ran*, broken out with explanation — you don't need to run them again. Use the table to jump to whatever you want to verify:
+
+| What you want to check | Go to section | What that test proves |
+|------------------------|---------------|-----------------------|
+| Services restart on crash, recover after reboot, and order A-after-B/C correctly | **Services & systemd Lifecycle → Verify lifecycle** | systemd lifecycle + dependency management |
+| One request is traceable across every service by its `request_id` | **Logs** | request tracing / structured logging |
+| Only Service A is reachable through Nginx; B and C are **not** | **Nginx → Verify** | reverse proxy + network security |
+| Everything at once, pass/fail in one command | **One-shot sanity check** | full end-to-end |
 
 ## Services & systemd Lifecycle (`systemd/*.service`)
 
@@ -84,7 +97,7 @@ The three Python/Flask services run as systemd units so they start on boot, rest
 - The real enforcement is an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A and **fails A's start if they don't answer**. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
 - We deliberately use `Wants=`, not `Requires=`/`BindsTo=`. Those propagate **deactivation**, so `systemctl stop service-b` would cascade and stop Service A. We want the opposite at runtime: A stays up and **degrades gracefully** — its calls to B return `502` with a structured `request_failed` log — rather than disappearing. (See the "Verify lifecycle" drill below.)
 
-**Install / first deploy** (run as root on the VM)
+**Install / first deploy** — *reference (already done in Quick Start; shown here with per-step explanation, not to re-run)*
 ```
 # 0. Get the code onto the box and into the standard location.
 sudo mkdir -p /opt/service-env
@@ -102,11 +115,7 @@ sudo chown -R serviceenv:serviceenv /opt/service-env
 #    *.internal names at request time; Service A's readiness gate needs it too).
 sudo ./scripts/hosts-setup.sh
 
-# 3b. Firewall: defense-in-depth backstop for B/C's bind-address protection.
-#     Allows only SSH (22) and Nginx's HTTP (80) in; everything else denied.
-sudo ./scripts/firewall-setup.sh
-
-# 4. Install and enable the units. Enabling A pulls in B and C via Wants=,
+# 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -128,6 +137,7 @@ sudo systemctl restart service-a
 sudo systemctl stop  service-a service-b service-c
 sudo systemctl start service-b service-c service-a   # order matters: deps first
 ```
+
 **Check what's listening on the service ports** (3001 = A, 3002 = B, 3003 = C)
 ```
 sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'
@@ -146,6 +156,7 @@ pkill -f 'services/service-b/app.py'          # kill a stray Service B process
 sudo fuser -k 3002/tcp                         # or: kill whatever holds port 3002
 sudo ss -ltnp '( sport = :3002 )'              # confirm the port is now free
 ```
+
 **Logs** (structured JSON via journald)
 ```
 journalctl -u service-a -f                 # follow one service
@@ -194,7 +205,7 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 - To troubleshoot discovery failures: `getent hosts service-a.internal`, check `/etc/hosts`, then `sudo nginx -t` to confirm Nginx can parse/resolve the upstream, then `sudo systemctl reload nginx`.
 
 **Request tracing**
-- Every request gets an `X-Request-ID` (the client's header if present, otherwise a fresh one generated by Nginx's `$request_id`). It's forwarded to Service A via `proxy_set_header` and echoed back to the client via a response header, so the same ID can be grepped across the Nginx access log and every downstream service log.
+- Every request gets an `X-Request-ID` (the client's header if present, otherwise a fresh one generated by Nginx's `$request_id`). It's forwarded to Service A via `proxy_set_header` and ed back to the client via a response header, so the same ID can be grepped across the Nginx access log and every downstream service log.
 
 **Logging**
 - Access log: `/var/log/nginx/service-env-access.log`, written as one JSON object per request (`timestamp`, `request_id`, `method`, `path`, `status`, `upstream`, `request_time`), matching the logging contract.
@@ -203,12 +214,9 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 
 **Network security**
 - Service B (3002) and Service C (3003) are not exposed by this proxy at all — there is no `location` block that forwards to them, so Nginx has no path by which it could reach them even if asked to.
-- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. Two independent layers actually enforce that:
-  1. **Bind-address**: B and C bind to `127.0.0.1`, not `0.0.0.0` (set via `BIND_HOST` in their systemd units), so nothing outside the VM can reach those ports regardless of firewall state.
-  2. **Firewall (`scripts/firewall-setup.sh`, `ufw`)**: default-deny on incoming, with only SSH (22) and Nginx's HTTP (80) explicitly allowed. This is the backstop for layer 1 — if `BIND_HOST` ever drifts to `0.0.0.0` by accident, the firewall still blocks external access instead of silently exposing B/C.
-- Run `sudo ./scripts/firewall-setup.sh` once per VM to apply this. See "Verify" below for the test that checks both layers are actually working, not just configured.
+- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. The actual protection against that is B/C binding to `127.0.0.1` (not `0.0.0.0`) plus a host firewall (e.g. `ufw`) blocking 3002/3003 from outside. **That enforcement lives outside this config** — whoever owns the systemd units / firewall rules for Service B and C needs to confirm it's in place. See "Verify" below for the test that actually checks it.
 
-**Deploy**
+**Deploy** — *reference (already done in Quick Start; shown here with explanation, not to re-run)*
 ```
 # 1. Service discovery must exist *before* Nginx starts - it resolves
 #    upstream hostnames at config-load time and will refuse to start
@@ -233,17 +241,7 @@ curl -i http://localhost/service-b              # expect Nginx's JSON 404 (prove
 
 # Direct to the ports, bypassing Nginx entirely - this is the real network-security
 # test the instructor will run, from off-box / using the VM's public IP:
-curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection timed out (ufw dropping it)
-curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection timed out (ufw dropping it)
-
-# Confirm the firewall itself is the active layer (not just bind-address):
-sudo ufw status verbose                          # expect: active, default deny (incoming),
-                                                  #   only 22/tcp and 80/tcp explicitly allowed
+curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection refused / timeout
+curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection refused / timeout
 ```
-If either of the `curl` commands return a response instead of timing out, something regressed — either B/C started binding to `0.0.0.0` instead of `127.0.0.1`, or `ufw` is inactive (`sudo ufw status`). If you only get "connection refused" instead of "timed out," the firewall isn't active and you're seeing bind-address-only protection — re-run `sudo ./scripts/firewall-setup.sh`.
-
-**One-shot sanity check**
-```
-./scripts/test-end-to-end.sh
-```
-Runs five assertions in one go - Service A health, the full A→B→C→A flow, Service B/C not routable through Nginx, and structured JSON 404s on unknown routes - and exits non-zero if anything fails. Good to run right after deploying, after a reboot, or right before the demo.
+If either of the last two return a response instead of timing out, Nginx is not the problem — it means B/C are bound to `0.0.0.0` and/or no firewall rule blocks the port, which is outside this config's control.
