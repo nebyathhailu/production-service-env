@@ -58,8 +58,8 @@ sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
 sudo nginx -t && sudo systemctl reload nginx
 
 # 4. Smoke test — health, the full chain, and that B/C aren't routable
-curl -s http://localhost/service-a/health ; echo
-curl -s http://localhost/service-a/greet-service-b ; echo        # -> "status":"success"
+curl -s http://localhost/service-a/health ; 
+curl -s http://localhost/service-a/greet-service-b ;         # -> "status":"success"
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b   # -> 404
 ```
 
