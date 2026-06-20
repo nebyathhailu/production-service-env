@@ -40,6 +40,10 @@ sudo apt update && sudo apt install -y python3-venv nginx curl git
 git clone https://github.com/nebyathhailu/production-service-env.git
 cd production-service-env
 
+# 1b. Pre-flight: make sure ports 3001/3002/3003 are free. If a previous run
+sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'
+pkill -f 'services/service-.\?/app.py' || true     # clear any stray manual runs
+
 # 2. Deploy the services (creates /opt/service-env, venv, serviceenv user, systemd units)
 sudo mkdir -p /opt/service-env
 sudo cp -r services requirements.txt /opt/service-env/
@@ -51,6 +55,7 @@ sudo ./scripts/hosts-setup.sh                       # service discovery (/etc/ho
 sudo cp systemd/service-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now service-b service-c service-a
+sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'   # confirm all 3 are listening
 
 # 3. Deploy Nginx
 sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
@@ -119,7 +124,24 @@ sudo systemctl restart service-a
 sudo systemctl stop  service-a service-b service-c
 sudo systemctl start service-b service-c service-a   # order matters: deps first
 ```
+**Check what's listening on the service ports** (3001 = A, 3002 = B, 3003 = C)
+```
+sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'
+# Each port should be owned by a "python" process under the matching unit.
+# Empty output for a port = that service is not listening (see Troubleshooting).
+```
 
+**Stop / clear a port held by a stray process** (e.g. an old manual `python app.py`
+left over from before systemd managed the services — this blocks the unit from binding)
+```
+# Preferred: stop via systemd (clean shutdown, won't auto-restart).
+sudo systemctl stop service-b
+
+# If something OUTSIDE systemd is holding the port, find and kill it:
+pkill -f 'services/service-b/app.py'          # kill a stray Service B process
+sudo fuser -k 3002/tcp                         # or: kill whatever holds port 3002
+sudo ss -ltnp '( sport = :3002 )'              # confirm the port is now free
+```
 **Logs** (structured JSON via journald)
 ```
 journalctl -u service-a -f                 # follow one service
