@@ -11,8 +11,9 @@ The three Python/Flask services run as systemd units so they start on boot, rest
 - Runs as the unprivileged system user `serviceenv` (no login, no home) — keeps services off `root` and lets the unit hardening (`ProtectHome`, `ProtectSystem`) apply.
 
 **Dependency management** (assignment requirement: A must not start before B and C, and must not become operational until they are available)
-- `service-a.service` declares `After=service-b.service service-c.service` and `Requires=service-b.service service-c.service` — ordering + "won't start if a dep failed to start."
+- `service-a.service` declares `After=service-b.service service-c.service` and `Wants=service-b.service service-c.service` — ordering + "try to start the deps first."
 - It also has an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
+- **Why `Wants=` and not `Requires=`:** we initially used `Requires=`, but `Requires=` propagates *deactivation* as well as activation — if B or C is later stopped or crashes, systemd automatically tears down A too, taking the public entry point down along with one internal dependency. We confirmed this live: `systemctl stop service-b` was immediately followed by systemd stopping `service-a` on its own. `Wants=` keeps the startup ordering/pull-in behavior without that runtime coupling, so A now stays up when a dependency goes down later and lets its own error handling return a graceful `502` instead of disappearing entirely (verified: `service-a` stays `active` while `service-b` is `inactive`, and the request through Nginx returns `{"message":"Service B unreachable", ...}` with a structured `request_failed` log entry).
 
 **Install / first deploy** (run as root on the VM)
 ```
@@ -32,7 +33,7 @@ sudo chown -R serviceenv:serviceenv /opt/service-env
 #    *.internal names at request time; Service A's readiness gate needs it too).
 sudo ./scripts/hosts-setup.sh
 
-# 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
+# 4. Install and enable the units. Enabling A pulls in B and C via Wants=,
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -72,11 +73,20 @@ systemctl is-active  service-a service-b service-c   # -> active
 sudo systemctl kill -s SIGKILL service-b
 sleep 3; systemctl is-active service-b               # -> active (new PID)
 
-# Dependency gate: stop a dependency, then A should refuse to start cleanly.
+# Dependency gate at startup: if a dep is down when A tries to (re)start,
+# the ExecStartPre readiness gate blocks (~30s) then fails the start attempt.
 sudo systemctl stop service-b
 sudo systemctl restart service-a                     # blocks on readiness gate, then fails
 journalctl -u service-a -n 20                        # shows "dependencies ... not ready"
 sudo systemctl start service-b && sudo systemctl start service-a   # recovers
+
+# Graceful degradation at runtime: stop a dependency WITHOUT touching A.
+# A must stay active and degrade gracefully, not go down with it.
+sudo systemctl stop service-b
+systemctl is-active service-a service-b service-c    # -> active inactive active
+curl -i --max-time 8 http://localhost/service-a/greet-service-b   # -> 502, JSON body, not a hang/crash
+journalctl -u service-a -n 3                          # shows a structured "request_failed" entry
+sudo systemctl start service-b                        # recovers, next request succeeds
 ```
 
 ## Nginx Reverse Proxy (`nginx/service-env.conf`)
