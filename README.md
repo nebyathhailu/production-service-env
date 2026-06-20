@@ -1,6 +1,70 @@
 # production-service-env
 A production-style microservices environment with Nginx reverse proxy, systemd lifecycle management, structured logging, and request tracing.
 
+## Overview
+
+Three independent Python/Flask HTTP services sit behind an Nginx reverse proxy. Only **Service A** is public (through Nginx on port 80); **Service B** and **Service C** are internal-only. A single request flows through all of them and is traceable end to end by a shared `X-Request-ID`:
+
+```
+Client → Nginx (:80) → Service A (:3001) → Service B (:3002) → Service C (:3003) → Service A callback
+```
+
+| Component | Port | Public? | Role |
+|-----------|------|---------|------|
+| Nginx | 80 | yes | Reverse proxy; the only public entry point |
+| Service A | 3001 | via Nginx only | Entry point; calls B; receives C's callback |
+| Service B | 3002 | internal | Receives from A; forwards to C |
+| Service C | 3003 | internal | Processes; calls back to A |
+
+## Prerequisites
+
+These are **Linux + systemd** services, so they run on an Ubuntu host or VM (not natively on macOS/Windows). You need:
+- Ubuntu 22.04+ (or similar systemd-based Linux)
+- `python3` + `python3-venv`, `nginx`, `curl`, `git`
+- `sudo`/root access (for `/opt`, systemd units, `/etc/hosts`, and Nginx)
+
+**Running locally on macOS/Windows?** Use a small Ubuntu VM. With [Multipass](https://multipass.run):
+```
+multipass launch --name service-env 22.04
+multipass shell service-env        # everything below runs inside the VM
+multipass info service-env         # note the IPv4 — used for the network-security test
+```
+
+## Quick Start (run it locally, top to bottom)
+
+Run these inside the Ubuntu host/VM. Each block is detailed in its own section further down.
+
+```
+# 1. Get the code
+sudo apt update && sudo apt install -y python3-venv nginx curl git
+git clone https://github.com/nebyathhailu/production-service-env.git
+cd production-service-env
+
+# 2. Deploy the services (creates /opt/service-env, venv, serviceenv user, systemd units)
+sudo mkdir -p /opt/service-env
+sudo cp -r services requirements.txt /opt/service-env/
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin serviceenv || true
+sudo python3 -m venv /opt/service-env/venv
+sudo /opt/service-env/venv/bin/pip install -r /opt/service-env/requirements.txt
+sudo chown -R serviceenv:serviceenv /opt/service-env
+sudo ./scripts/hosts-setup.sh                       # service discovery (/etc/hosts) — must run first
+sudo cp systemd/service-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now service-b service-c service-a
+
+# 3. Deploy Nginx
+sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
+sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 4. Smoke test — health, the full chain, and that B/C aren't routable
+curl -s http://localhost/service-a/health ; 
+curl -s http://localhost/service-a/greet-service-b ;         # -> "status":"success"
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b   # -> 404
+```
+
+If all three services are `active` and the chain returns `"status":"success"`, the system is up. See **Verify lifecycle**, **Verify** (Nginx), and the per-section detail below for the full validation, request-tracing, and failure-drill steps.
+
 ## Services & systemd Lifecycle (`systemd/*.service`)
 
 The three Python/Flask services run as systemd units so they start on boot, restart on failure, log to journald, and honour the A→depends-on→B,C ordering.
@@ -11,9 +75,9 @@ The three Python/Flask services run as systemd units so they start on boot, rest
 - Runs as the unprivileged system user `serviceenv` (no login, no home) — keeps services off `root` and lets the unit hardening (`ProtectHome`, `ProtectSystem`) apply.
 
 **Dependency management** (assignment requirement: A must not start before B and C, and must not become operational until they are available)
-- `service-a.service` declares `After=service-b.service service-c.service` and `Wants=service-b.service service-c.service` — ordering + "try to start the deps first."
-- It also has an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
-- **Why `Wants=` and not `Requires=`:** we initially used `Requires=`, but `Requires=` propagates *deactivation* as well as activation — if B or C is later stopped or crashes, systemd automatically tears down A too, taking the public entry point down along with one internal dependency. We confirmed this live: `systemctl stop service-b` was immediately followed by systemd stopping `service-a` on its own. `Wants=` keeps the startup ordering/pull-in behavior without that runtime coupling, so A now stays up when a dependency goes down later and lets its own error handling return a graceful `502` instead of disappearing entirely (verified: `service-a` stays `active` while `service-b` is `inactive`, and the request through Nginx returns `{"message":"Service B unreachable", ...}` with a structured `request_failed` log entry).
+- `service-a.service` declares `After=service-b.service service-c.service` (ordering) and `Wants=service-b.service service-c.service` (best-effort pull-in at start).
+- The real enforcement is an `ExecStartPre=` readiness gate that polls B's and C's `/health` (up to ~30s) before launching A and **fails A's start if they don't answer**. Ordering alone only guarantees the dependency *processes were launched*; the gate guarantees they are actually *listening* before A goes live.
+- We deliberately use `Wants=`, not `Requires=`/`BindsTo=`. Those propagate **deactivation**, so `systemctl stop service-b` would cascade and stop Service A. We want the opposite at runtime: A stays up and **degrades gracefully** — its calls to B return `502` with a structured `request_failed` log — rather than disappearing. (See the "Verify lifecycle" drill below.)
 
 **Install / first deploy** (run as root on the VM)
 ```
@@ -77,20 +141,22 @@ systemctl is-active  service-a service-b service-c   # -> active
 sudo systemctl kill -s SIGKILL service-b
 sleep 3; systemctl is-active service-b               # -> active (new PID)
 
-# Dependency gate at startup: if a dep is down when A tries to (re)start,
-# the ExecStartPre readiness gate blocks (~30s) then fails the start attempt.
+# Runtime dependency failure -> A STAYS UP and degrades gracefully.
+# (Wants=, not Requires=, so stopping B does NOT cascade-stop A.)
 sudo systemctl stop service-b
-sudo systemctl restart service-a                     # blocks on readiness gate, then fails
-journalctl -u service-a -n 20                        # shows "dependencies ... not ready"
-sudo systemctl start service-b && sudo systemctl start service-a   # recovers
+systemctl is-active service-a                        # -> active (not cascaded down)
+curl -s http://localhost/service-a/greet-service-b   # -> {"status":"error",...} (502)
+journalctl -u service-a -n 20 -o cat                 # shows the structured request_failed log
+sudo systemctl start service-b                       # re-run the curl -> "status":"success"
 
-# Graceful degradation at runtime: stop a dependency WITHOUT touching A.
-# A must stay active and degrade gracefully, not go down with it.
-sudo systemctl stop service-b
-systemctl is-active service-a service-b service-c    # -> active inactive active
-curl -i --max-time 8 http://localhost/service-a/greet-service-b   # -> 502, JSON body, not a hang/crash
-journalctl -u service-a -n 3                          # shows a structured "request_failed" entry
-sudo systemctl start service-b                        # recovers, next request succeeds
+# Startup readiness gate -> A won't go operational until deps are healthy.
+# Mask B so Wants= can't auto-start it, then start A: the gate waits ~30s, fails.
+sudo systemctl stop service-a
+sudo systemctl mask --now service-b
+sudo systemctl start service-a                       # blocks on the gate, then fails to start
+journalctl -u service-a -n 20                        # shows "dependencies ... not ready"
+sudo systemctl unmask service-b
+sudo systemctl start service-b service-a             # recovers
 ```
 
 ## Nginx Reverse Proxy (`nginx/service-env.conf`)
