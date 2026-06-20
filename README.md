@@ -34,20 +34,20 @@ multipass info service-env         # note the IPv4 — used for the network-secu
 
 Run these inside the Ubuntu host/VM. Each block is detailed in its own section further down.
 
-## 1. Get the code
+#### 1. Get the code
 ```
 sudo apt update && sudo apt install -y python3-venv nginx curl git
 git clone https://github.com/nebyathhailu/production-service-env.git
 cd production-service-env
 ```
-## 1b. Pre-flight: make sure ports 3001/3002/3003 are free. If a previous run
+#### 1b. Pre-flight: make sure ports 3001/3002/3003 are free. If a previous run
 ```
 #     left a manual `python app.py` behind, systemd can't bind and you'll see
 #     "Service B unreachable". Empty output here = good, you're clear to deploy.
 sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'
 pkill -f 'services/service-.\?/app.py' || true     # clear any stray manual runs
 ```
-## 2. Deploy the services (creates /opt/service-env, venv, serviceenv user, systemd units)
+#### 2. Deploy the services (creates /opt/service-env, venv, serviceenv user, systemd units)
 ```
 sudo mkdir -p /opt/service-env
 sudo cp -r services requirements.txt /opt/service-env/
@@ -61,13 +61,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now service-b service-c service-a
 sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'   # confirm all 3 are listening
 ```
-## 3. Deploy Nginx
+#### 3. Deploy Nginx
 ```
 sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
 sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
-## 4. Smoke test — health, the full chain, and that B/C aren't routable
+#### 4. Smoke test — health, the full chain, and that B/C aren't routable
 ```
 curl -s http://localhost/service-a/health ; 
 curl -s http://localhost/service-a/greet-service-b ;         # -> "status":"success"
@@ -103,28 +103,28 @@ The three Python/Flask services run as systemd units so they start on boot, rest
 
 **Install / first deploy** — *reference (already done in Quick Start; shown here with per-step explanation, not to re-run)*
 
-## 0. Get the code onto the box and into the standard location.
+#### 0. Get the code onto the box and into the standard location.
 ```
 sudo mkdir -p /opt/service-env
 sudo cp -r services requirements.txt /opt/service-env/
 ```
-## 1. Dedicated unprivileged service account.
+#### 1. Dedicated unprivileged service account.
 ```
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin serviceenv || true
 ```
-## 2. Shared virtualenv + dependencies (Flask + requests).
+#### 2. Shared virtualenv + dependencies (Flask + requests).
 ```
 sudo python3 -m venv /opt/service-env/venv
 sudo /opt/service-env/venv/bin/pip install -r /opt/service-env/requirements.txt
 sudo chown -R serviceenv:serviceenv /opt/service-env
 ```
-## 3. Service discovery must exist BEFORE the services start (they resolve
+#### 3. Service discovery must exist BEFORE the services start (they resolve
 ```
 #    *.internal names at request time; Service A's readiness gate needs it too).
 sudo ./scripts/hosts-setup.sh
 ```
 
-## 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
+#### 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
 ```
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
@@ -233,18 +233,18 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 - That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. The actual protection against that is B/C binding to `127.0.0.1` (not `0.0.0.0`) plus a host firewall (e.g. `ufw`) blocking 3002/3003 from outside. **That enforcement lives outside this config** — whoever owns the systemd units / firewall rules for Service B and C needs to confirm it's in place. See "Verify" below for the test that actually checks it.
 
 **Deploy** — *reference (already done in Quick Start; shown here with explanation, not to re-run)*
-## 1. Service discovery must exist *before* Nginx starts - it resolves
+#### 1. Service discovery must exist *before* Nginx starts - it resolves
 ```
 #    upstream hostnames at config-load time and will refuse to start
 #    with "host not found in upstream" if /etc/hosts isn't populated yet.
 sudo ./scripts/hosts-setup.sh
 ```
-## 2. Disable the distro's default site - it ships with `server_name localhost`
+#### 2. Disable the distro's default site - it ships with `server_name localhost`
 ```
 #    and will shadow our config for any request with a "Host: localhost" header.
 sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
 ```
-## 3. Deploy our config.
+#### 3. Deploy our config.
 ```
 sudo cp nginx/service-env.conf /etc/nginx/conf.d/service-env.conf
 sudo nginx -t
