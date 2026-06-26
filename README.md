@@ -1,6 +1,49 @@
 # production-service-env
 A production-style microservices environment with Nginx reverse proxy, systemd lifecycle management, structured logging, and request tracing.
 
+## Running with Docker Compose
+
+Everything below this section documents the original VM/systemd deployment. There's also a fully containerized version on the `feature/docker-compose` branch (`docker-compose.yml`, `services/*/Dockerfile`, `nginx/docker-compose.conf`) that preserves the same properties - Nginx as the only public entry point, B/C internal-only, the same A→B→C→A flow, structured logs, and request tracing - just running under Docker instead of systemd on a VM. See `docs/CONTAINER_VALIDATION.md` for full command-by-command proof it works.
+
+**Start the system**
+```
+docker compose up --build -d
+```
+B and C must report `healthy` before A starts, and A must report `healthy` before Nginx starts - enforced by `depends_on: condition: service_healthy` in `docker-compose.yml`. This is the Compose equivalent of the VM version's systemd `ExecStartPre` readiness gate.
+
+**Test the public route**
+```
+curl -i http://localhost:8080/service-a/health
+curl -i http://localhost:8080/service-a/greet-service-b
+```
+
+**Prove B and C are internal-only**
+```
+curl -i --connect-timeout 3 http://localhost:3002/health   # connection refused - no host port published
+curl -i --connect-timeout 3 http://localhost:3003/health   # connection refused - no host port published
+docker compose ps                                            # B/C show "3002/tcp"/"3003/tcp", no host mapping
+```
+
+**View logs**
+```
+docker compose logs                  # everything
+docker compose logs -f service-a     # follow one service
+docker compose logs | grep <request-id>   # trace one request across Nginx + all three services
+```
+
+**Stop / restart a service**
+```
+docker compose stop service-b        # Service A stays up, returns a graceful 502 for that one path
+docker compose start service-b       # recovers immediately, no other steps needed
+docker compose restart service-a
+```
+
+**Shut everything down**
+```
+docker compose down                  # stop and remove containers + network
+docker compose down -v                # also remove the (unused, stateless) volumes
+```
+
 ## Overview
 
 Three independent Python/Flask HTTP services sit behind an Nginx reverse proxy. Only **Service A** is public (through Nginx on port 80); **Service B** and **Service C** are internal-only. A single request flows through all of them and is traceable end to end by a shared `X-Request-ID`:
