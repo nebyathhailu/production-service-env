@@ -350,12 +350,4 @@ Each row is a failure the system is expected to handle; capture the real `curl` 
 | **Nginx won't reload** | `sudo nginx -t` | `host not found in upstream` ⇒ `/etc/hosts` missing; run `hosts-setup.sh`. |
 | **B/C reachable from off-box** | from the **host**: `curl --connect-timeout 3 http://<vm-ip>:3002/health` | must fail; if not, check `BIND_HOST` and `ufw status`. |
 
-## Evidence / Proof Pack
-
-A claim isn't proven until its output is captured. Generate an inside-VM transcript and commit it:
-
-```
-./scripts/collect-evidence.sh     # or: make evidence  ->  docs/evidence/evidence-<timestamp>.txt
-```
-
 The external-exposure and host-forwarding checks must be run **from the host** (they catch VM port-forward / NAT leaks). The full claim→command→expected matrix and where to paste outputs is in [docs/evidence/EVIDENCE.md](docs/evidence/EVIDENCE.md).
