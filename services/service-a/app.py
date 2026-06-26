@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 import os
+import signal
 import sys
 from datetime import datetime, timezone
 
@@ -42,11 +43,20 @@ def get_request_id():
     return request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
+def client_ip():
+    # Nginx forwards the real caller in X-Forwarded-For/X-Real-IP; fall back to
+    # the socket peer when called directly.
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.headers.get("X-Real-IP") or request.remote_addr
+
+
 # ── 1. health check ──────────────────────────────────────────────────
 @app.route('/health')
 def health():
     rid = get_request_id()
-    log("health_check", rid, request.path, 200, method=request.method)
+    log("health_check", rid, request.path, 200, method=request.method, client_ip=client_ip())
     return jsonify({
         "service": SERVICE_NAME,
         "status": "healthy",
@@ -56,10 +66,14 @@ def health():
 
 
 # ── 2. start the full request flow ───────────────────────────────────
-@app.route('/greet-service-b')
+# GET is the contract-defined trigger for this endpoint (Service API & Logging
+# Contract). It carries no request body and is safe to re-issue — the only
+# state-changing hop in the flow is C's POST callback to /greeting-rcvd below.
+# POST is also accepted so a demo can drive the flow with either verb.
+@app.route('/greet-service-b', methods=['GET', 'POST'])
 def greet_service_b():
     rid = get_request_id()
-    log("request_received", rid, request.path, 200, method=request.method)
+    log("request_received", rid, request.path, 200, method=request.method, client_ip=client_ip())
 
     try:
         response = requests.get(
@@ -104,7 +118,7 @@ def greeting_received():
 @app.errorhandler(404)
 def not_found(e):
     rid = get_request_id()
-    log("route_not_found", rid, request.path, 404, method=request.method)
+    log("route_not_found", rid, request.path, 404, method=request.method, client_ip=client_ip())
     return jsonify({"error": "route not found", "path": request.path}), 404
 
 
@@ -115,8 +129,18 @@ def add_request_id_header(resp):
     return resp
 
 
+# ── shutdown lifecycle event ─────────────────────────────────────────
+# systemd sends SIGTERM on `systemctl stop`; log a structured shutdown event
+# (mirrors service_started) so the journal shows a clean lifecycle, then exit.
+def _handle_shutdown(signum, _frame):
+    log("service_stopping", "-", "-", 200, signal=signal.Signals(signum).name)
+    sys.exit(0)
+
+
 # ── start the server ─────────────────────────────────────────────────
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
         bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL)
     app.run(host=BIND_HOST, port=PORT, threaded=True)

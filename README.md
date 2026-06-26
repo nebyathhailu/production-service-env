@@ -34,6 +34,21 @@ multipass info service-env         # note the IPv4 — used for the network-secu
 
 Run these inside the Ubuntu host/VM. Each block is detailed in its own section further down.
 
+### Option A — one command (recommended)
+
+After cloning, a single idempotent installer does the entire deploy (dependencies, `/opt` layout, `serviceenv` user, venv, `/etc/hosts`, firewall, systemd units, Nginx) and finishes with the smoke test:
+
+```
+sudo apt update && sudo apt install -y git
+git clone https://github.com/nebyathhailu/production-service-env.git
+cd production-service-env
+sudo ./scripts/install.sh        # or:  make install
+```
+
+If it ends with `Results: 5 passed, 0 failed`, you're done. The manual steps below (Option B) are the same actions broken out, for when you want to understand or run a single piece.
+
+### Option B — manual, step by step
+
 #### 1. Get the code
 ```
 sudo apt update && sudo apt install -y python3-venv nginx curl git
@@ -61,6 +76,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now service-b service-c service-a
 sudo ss -ltnp '( sport = :3001 or sport = :3002 or sport = :3003 )'   # confirm all 3 are listening
 ```
+#### 2b. Firewall — defense-in-depth backstop (only 22 + 80 inbound)
+```
+sudo ./scripts/firewall-setup.sh
+```
 #### 3. Deploy Nginx
 ```
 sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
@@ -69,9 +88,15 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 #### 4. Smoke test — health, the full chain, and that B/C aren't routable
 ```
-curl -s http://localhost/service-a/health ; 
-curl -s http://localhost/service-a/greet-service-b ;         # -> "status":"success"
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b   # -> 404
+curl -s http://localhost/service-a/health ; echo
+curl -s http://localhost/service-a/greet-service-b ; echo
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b
+```
+**Expected output:**
+```
+{"message":"Hello service-a listening on 3001","port":3001,"service":"service-a","status":"healthy"}
+{"message":"Request completed successfully","request_id":"...","status":"success"}
+404
 ```
 
 If all three services are `active` and the chain returns `"status":"success"`, **the system is fully deployed — you only run the Quick Start once.**
@@ -85,7 +110,7 @@ Everything below is **explanation and tests, not setup to repeat.** The "Install
 | Services restart on crash, recover after reboot, and order A-after-B/C correctly | **Services & systemd Lifecycle → Verify lifecycle** | systemd lifecycle + dependency management |
 | One request is traceable across every service by its `request_id` | **Logs** | request tracing / structured logging |
 | Only Service A is reachable through Nginx; B and C are **not** | **Nginx → Verify** | reverse proxy + network security |
-| Everything at once, pass/fail in one command | **One-shot sanity check** | full end-to-end |
+| Everything at once, pass/fail in one command | **Evidence / Proof Pack** (`make verify` / `./scripts/test-end-to-end.sh`) | full end-to-end |
 
 ## Services & systemd Lifecycle (`systemd/*.service`)
 
@@ -124,7 +149,7 @@ sudo chown -R serviceenv:serviceenv /opt/service-env
 sudo ./scripts/hosts-setup.sh
 ```
 
-#### 4. Install and enable the units. Enabling A pulls in B and C via Requires=,
+#### 4. Install and enable the units. Enabling A pulls in B and C via Wants=,
 ```
 #    but enable all three so each comes back independently on reboot.
 sudo cp systemd/service-*.service /etc/systemd/system/
@@ -174,28 +199,59 @@ sudo ss -ltnp '( sport = :3002 )'              # confirm the port is now free
 ```
 journalctl -u service-a -f                 # follow one service
 journalctl -u service-a -u service-b -u service-c --since "10 min ago"
-journalctl -u service-a -o cat | grep '"request_id":"<id>"'   # trace one request
+# Trace one request across every service by its ID:
+RID=$(curl -s http://localhost/service-a/greet-service-b | grep -o '"request_id":"[^"]*"' | cut -d'"' -f4)
+journalctl -u service-a -u service-b -u service-c -o cat --since "1 min ago" | grep "$RID"
 ```
+**Expected output** (the same `request_id` in every service — the full A→B→C→A journey):
+```
+{"...","service":"service-a","event":"request_received","request_id":"<RID>","path":"/greet-service-b",...,"client_ip":"127.0.0.1"}
+{"...","service":"service-b","event":"request_received","request_id":"<RID>","path":"/greet",...}
+{"...","service":"service-c","event":"request_received","request_id":"<RID>","path":"/greet-c",...}
+{"...","service":"service-c","event":"callback_sent","request_id":"<RID>","target":"service-a",...}
+{"...","service":"service-b","event":"request_forwarded","request_id":"<RID>","target":"service-c",...}
+{"...","service":"service-a","event":"callback_received","request_id":"<RID>","source_service":"service-c",...}
+```
+Each request log line carries the standard contract fields plus **`client_ip`** (the real caller — for Service A this comes from Nginx's `X-Forwarded-For`/`X-Real-IP`). Lifecycle is logged too: `service_started` on boot and **`service_stopping`** on `systemctl stop` (SIGTERM), so the journal shows a clean open/close for every service.
 
 **Verify lifecycle**
 ```
 # Boot/reboot recovery: after `sudo reboot`, all three should be active:
-systemctl is-enabled service-a service-b service-c   # -> enabled
-systemctl is-active  service-a service-b service-c   # -> active
+systemctl is-enabled service-a service-b service-c
+systemctl is-active  service-a service-b service-c
+```
+**Expected output:**
+```
+enabled
+enabled
+enabled
+active
+active
+active
 ```
 ```
 # Auto-restart after failure: kill the process, it should respawn within ~2s.
 sudo systemctl kill -s SIGKILL service-b
-sleep 3; systemctl is-active service-b               # -> active (new PID)
+sleep 3; systemctl is-active service-b
+```
+**Expected output** (systemd respawned it with a new PID):
+```
+active
 ```
 ```
 # Runtime dependency failure -> A STAYS UP and degrades gracefully.
 # (Wants=, not Requires=, so stopping B does NOT cascade-stop A.)
 sudo systemctl stop service-b
-systemctl is-active service-a                        # -> active (not cascaded down)
-curl -s http://localhost/service-a/greet-service-b   # -> {"status":"error",...} (502)
+systemctl is-active service-a
+curl -s http://localhost/service-a/greet-service-b ; echo
 journalctl -u service-a -n 20 -o cat                 # shows the structured request_failed log
 sudo systemctl start service-b                       # re-run the curl -> "status":"success"
+```
+**Expected output** (A is still `active` and returns a clean 502 — no cascade):
+```
+active
+{"message":"Service B unreachable","request_id":"...","status":"error"}
+{"timestamp":"...","service":"service-a","event":"request_failed","request_id":"...","path":"/greet-service-b","status":502,"method":"GET","error":"..."}
 ```
 ```
 # Startup readiness gate -> A won't go operational until deps are healthy.
@@ -221,7 +277,7 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 - To troubleshoot discovery failures: `getent hosts service-a.internal`, check `/etc/hosts`, then `sudo nginx -t` to confirm Nginx can parse/resolve the upstream, then `sudo systemctl reload nginx`.
 
 **Request tracing**
-- Every request gets an `X-Request-ID` (the client's header if present, otherwise a fresh one generated by Nginx's `$request_id`). It's forwarded to Service A via `proxy_set_header` and ed back to the client via a response header, so the same ID can be grepped across the Nginx access log and every downstream service log.
+- Every request gets an `X-Request-ID` (the client's header if present, otherwise a fresh one generated by Nginx's `$request_id`). It's forwarded to Service A via `proxy_set_header` and echoed back to the client via a response header, so the same ID can be grepped across the Nginx access log and every downstream service log.
 
 **Logging**
 - Access log: `/var/log/nginx/service-env-access.log`, written as one JSON object per request (`timestamp`, `request_id`, `method`, `path`, `status`, `upstream`, `request_time`), matching the logging contract.
@@ -230,7 +286,7 @@ Nginx is the only publicly reachable component. It listens on port 80 and expose
 
 **Network security**
 - Service B (3002) and Service C (3003) are not exposed by this proxy at all — there is no `location` block that forwards to them, so Nginx has no path by which it could reach them even if asked to.
-- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. The actual protection against that is B/C binding to `127.0.0.1` (not `0.0.0.0`) plus a host firewall (e.g. `ufw`) blocking 3002/3003 from outside. **That enforcement lives outside this config** — whoever owns the systemd units / firewall rules for Service B and C needs to confirm it's in place. See "Verify" below for the test that actually checks it.
+- That only proves **Nginx** won't proxy to B/C. It does not prove B/C are unreachable — an instructor (or attacker) hitting `http://<vm-ip>:3002/health` directly never touches Nginx at all. Two independent layers enforce that, both applied during deploy: (1) B/C bind to `127.0.0.1` (not `0.0.0.0`), set via `BIND_HOST` in their systemd units; (2) the host firewall (`scripts/firewall-setup.sh`, ufw) default-denies inbound and explicitly blocks 3002/3003. See "Verify" below for the test that actually checks both layers from off-box.
 
 **Deploy** — *reference (already done in Quick Start; shown here with explanation, not to re-run)*
 #### 1. Service discovery must exist *before* Nginx starts - it resolves
@@ -254,13 +310,52 @@ sudo systemctl reload nginx
 **Verify**
 ```
 # Through Nginx - only Service A should answer:
-curl -i http://localhost/service-a/health      # expect 200
-curl -i http://localhost/service-b              # expect Nginx's JSON 404 (proves no route exists in Nginx)
+curl -s http://localhost/service-a/health
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/service-b
+```
+**Expected output:**
+```
+{"message":"Hello service-a listening on 3001","port":3001,"service":"service-a","status":"healthy"}
+404
 ```
 ```
 # Direct to the ports, bypassing Nginx entirely - this is the real network-security
 # test the instructor will run, from off-box / using the VM's public IP:
-curl --max-time 3 http://<vm-ip>:3002/health    # expect: connection refused / timeout
-curl --max-time 3 http://<vm-ip>:3003/health    # expect: connection refused / timeout
+curl --max-time 3 http://<vm-ip>:3002/health
+curl --max-time 3 http://<vm-ip>:3003/health
 ```
-If either of the last two return a response instead of timing out, Nginx is not the problem — it means B/C are bound to `0.0.0.0` and/or no firewall rule blocks the port, which is outside this config's control.
+**Expected output** (both must fail to reach the service):
+```
+curl: (28) Connection timed out after 3001 milliseconds
+curl: (28) Connection timed out after 3002 milliseconds
+```
+If either returns a JSON response instead of timing out, Nginx is not the problem — it means B/C are bound to `0.0.0.0` and/or no firewall rule blocks the port, which is outside this config's control. ("Connection refused" instead of "timed out" means the firewall is off and only the loopback bind is protecting you — re-run `sudo ./scripts/firewall-setup.sh`.)
+
+## Why the trigger endpoint is `GET`
+
+`GET /service-a/greet-service-b` starts the flow. `GET` is what the Service API contract specifies, and it's safe here: the request carries **no body** and is **safe to re-issue** (re-running it just re-traces the chain). The only state-changing hop — Service C notifying Service A — is a **`POST`** to `/greeting-rcvd`. Service A also accepts `POST /greet-service-b` as an alias, so a demo can drive the flow with either verb.
+
+## Troubleshooting & Failure Scenarios
+
+Each row is a failure the system is expected to handle; capture the real `curl` + `journalctl` output into [docs/evidence/EVIDENCE.md](docs/evidence/EVIDENCE.md).
+
+| Symptom / scenario | How to investigate | Expected behavior |
+|--------------------|--------------------|-------------------|
+| **"Service B unreachable"** from A | `systemctl is-active service-b`; `sudo ss -ltnp '( sport = :3002 )'`; `getent hosts service-b.internal` | B down, port not bound, or name not resolving. Restart B / run `hosts-setup.sh`. |
+| **Stop a dependency** (`systemctl stop service-b`) | hit `/service-a/greet-service-b`; `journalctl -u service-a` | A stays **active**, returns `502`, logs `request_failed`. No cascade (it's `Wants=`, not `Requires=`). |
+| **Service won't start** | `systemctl status service-a`; `journalctl -u service-a -n 40` | A's readiness gate logs `dependencies … not ready` if B/C aren't healthy. |
+| **Crash recovery** | `sudo systemctl kill -s SIGKILL service-b; sleep 3; systemctl is-active service-b` | `active` again within ~2s (`Restart=on-failure`). |
+| **Reboot recovery** | `sudo reboot`; reconnect; `systemctl is-active service-a service-b service-c` | all `active`, no manual action. |
+| **Invalid route** | `curl -s http://localhost/service-a/nope` | structured JSON `404`, logged as `route_not_found`. |
+| **Nginx won't reload** | `sudo nginx -t` | `host not found in upstream` ⇒ `/etc/hosts` missing; run `hosts-setup.sh`. |
+| **B/C reachable from off-box** | from the **host**: `curl --connect-timeout 3 http://<vm-ip>:3002/health` | must fail; if not, check `BIND_HOST` and `ufw status`. |
+
+## Evidence / Proof Pack
+
+A claim isn't proven until its output is captured. Generate an inside-VM transcript and commit it:
+
+```
+./scripts/collect-evidence.sh     # or: make evidence  ->  docs/evidence/evidence-<timestamp>.txt
+```
+
+The external-exposure and host-forwarding checks must be run **from the host** (they catch VM port-forward / NAT leaks). The full claim→command→expected matrix and where to paste outputs is in [docs/evidence/EVIDENCE.md](docs/evidence/EVIDENCE.md).
