@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import json
 import logging
 import os
+import signal
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -46,11 +47,19 @@ def request_id():
     return request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
+def client_ip():
+    """Real caller IP: X-Forwarded-For/X-Real-IP if set, else the socket peer."""
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.headers.get("X-Real-IP") or request.remote_addr
+
+
 # Health check endpoint for liveness probes and validation commands.
 @app.get("/health")
 def health():
     rid = request_id()
-    log("health_check", rid, request.path, 200, method=request.method)
+    log("health_check", rid, request.path, 200, method=request.method, client_ip=client_ip())
     return jsonify(
         service=SERVICE_NAME,
         status="healthy",
@@ -63,7 +72,7 @@ def health():
 @app.get("/greet")
 def greet():
     rid = request_id()
-    log("request_received", rid, request.path, 200, method=request.method)
+    log("request_received", rid, request.path, 200, method=request.method, client_ip=client_ip())
     target_url = f"{SERVICE_C_URL}/greet-c"
     try:
         resp = requests.get(
@@ -89,7 +98,7 @@ def greet():
 @app.errorhandler(404)
 def not_found(_e):
     rid = request_id()
-    log("route_not_found", rid, request.path, 404, method=request.method)
+    log("route_not_found", rid, request.path, 404, method=request.method, client_ip=client_ip())
     return jsonify(request_id=rid, status="error", error="route_not_found",
                    path=request.path), 404
 
@@ -101,8 +110,16 @@ def add_request_id_header(resp):
     return resp
 
 
+# systemd sends SIGTERM on `systemctl stop`; log a structured shutdown event.
+def _handle_shutdown(signum, _frame):
+    log("service_stopping", "-", "-", 200, signal=signal.Signals(signum).name)
+    sys.exit(0)
+
+
 # Entry point: start the threaded server on the configured host/port.
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
         bind_host=BIND_HOST, port=PORT, downstream=SERVICE_C_URL)
     app.run(host=BIND_HOST, port=PORT, threaded=True)
