@@ -59,15 +59,15 @@ Required repository configuration:
 ### Latest deployed version
 
 Commit:
-`<full-commit-hash>`
+`67f4d40cbbefcbe2810676df3dff3cbcc7b53c6e`
 
 Image tag:
-`sha-<short-commit-hash>`
+`sha-67f4d40`
 
 Images:
-- `<dockerhub-username>/production-service-env-service-a:sha-<short-commit-hash>`
-- `<dockerhub-username>/production-service-env-service-b:sha-<short-commit-hash>`
-- `<dockerhub-username>/production-service-env-service-c:sha-<short-commit-hash>`
+- `meronkahsay/production-service-env-service-a:sha-67f4d40`
+- `meronkahsay/production-service-env-service-b:sha-67f4d40`
+- `meronkahsay/production-service-env-service-c:sha-67f4d40`
 
 ### Deploy
 
