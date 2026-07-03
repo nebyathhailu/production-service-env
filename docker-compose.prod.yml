@@ -14,7 +14,8 @@ services:
     volumes:
       - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - service-a
+      service-a:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - frontend
@@ -27,8 +28,10 @@ services:
       SERVICE_B_URL: "http://service-b:3002"
       DOWNSTREAM_TIMEOUT: "5"
     depends_on:
-      - service-b
-      - service-c
+      service-b:
+        condition: service_healthy
+      service-c:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - frontend
