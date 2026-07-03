@@ -44,6 +44,49 @@ docker compose down                  # stop and remove containers + network
 docker compose down -v                # also remove the (unused, stateless) volumes
 ```
 
+## Container CI/CD Deployment
+
+GitHub Actions (`.github/workflows/container-ci-cd.yml`) automates verification, packaging, and publishing for the containerized stack:
+
+- **`verify`** (every PR + push to `main`): installs each service's Python dependencies, runs its `pytest` suite (`services/service-*/tests/`), and builds its Docker image locally. Never pushes images.
+- **`verify-compose`** (needs `verify`): validates `docker compose config`, builds the full stack, brings it up, curls the gateway health route (`http://localhost:8080/service-a/health`), and tears the stack down.
+- **`publish`** (needs `verify-compose`, only on push to `main`): logs into Docker Hub and pushes each service image tagged `sha-<short-commit-hash>` (never `latest`), with OCI labels for revision and source repo.
+
+Required repository configuration:
+- Variable `DOCKERHUB_USERNAME`
+- Secret `DOCKERHUB_TOKEN`
+
+### Latest deployed version
+
+Commit:
+`<full-commit-hash>`
+
+Image tag:
+`sha-<short-commit-hash>`
+
+Images:
+- `<dockerhub-username>/production-service-env-service-a:sha-<short-commit-hash>`
+- `<dockerhub-username>/production-service-env-service-b:sha-<short-commit-hash>`
+- `<dockerhub-username>/production-service-env-service-c:sha-<short-commit-hash>`
+
+### Deploy
+
+```bash
+cp .env.example .env
+export DOCKERHUB_USERNAME=<dockerhub-username>
+export APP_NAME=production-service-env
+./scripts/deploy.sh sha-<short-commit-hash>
+```
+
+### Verify
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+curl http://localhost:8080/service-a/health
+```
+
+`docker-compose.prod.yml` pulls pre-built images from Docker Hub (`image:`) instead of building locally (`build:`) — the same network isolation as the dev stack applies: only Nginx publishes a host port (`8080`), and the `backend` network is `internal: true` so `service-b`/`service-c` are unreachable from the host even by container name.
+
 ## Overview
 
 Three independent Python/Flask HTTP services sit behind an Nginx reverse proxy. Only **Service A** is public (through Nginx on port 80); **Service B** and **Service C** are internal-only. A single request flows through all of them and is traceable end to end by a shared `X-Request-ID`:

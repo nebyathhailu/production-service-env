@@ -1,0 +1,66 @@
+# Production deployment stack - pulls pre-built, commit-tagged images from
+# Docker Hub instead of building locally (see docker-compose.yml for the dev
+# build-from-source version). Driven by scripts/deploy.sh.
+#
+# Required environment variables (see .env.example): DOCKERHUB_USERNAME,
+# APP_NAME, IMAGE_TAG. IMAGE_TAG must be a commit-pinned tag (sha-<hash>),
+# never "latest".
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"   # the only published host port - the sole public entry point
+    volumes:
+      - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - service-a
+    restart: unless-stopped
+    networks:
+      - frontend
+
+  service-a:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-a:${IMAGE_TAG}
+    environment:
+      BIND_HOST: "0.0.0.0"
+      SERVICE_A_PORT: "3001"
+      SERVICE_B_URL: "http://service-b:3002"
+      DOWNSTREAM_TIMEOUT: "5"
+    depends_on:
+      - service-b
+      - service-c
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    # No "ports:" - reachable on the Compose network (by Nginx) but not
+    # published to the host.
+
+  service-b:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-b:${IMAGE_TAG}
+    environment:
+      BIND_HOST: "0.0.0.0"
+      SERVICE_B_PORT: "3002"
+      SERVICE_C_URL: "http://service-c:3003"
+      DOWNSTREAM_TIMEOUT: "5"
+    restart: unless-stopped
+    networks:
+      - backend
+    # No "ports:" - internal-only.
+
+  service-c:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-c:${IMAGE_TAG}
+    environment:
+      BIND_HOST: "0.0.0.0"
+      SERVICE_C_PORT: "3003"
+      SERVICE_A_URL: "http://service-a:3001"
+      DOWNSTREAM_TIMEOUT: "5"
+    restart: unless-stopped
+    networks:
+      - backend
+    # No "ports:" - internal-only.
+
+networks:
+  frontend:
+  backend:
+    internal: true
