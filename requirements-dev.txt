@@ -1,0 +1,3 @@
+# Test-only dependencies (CI installs this on top of requirements.txt).
+# Not installed in Docker images - keeps runtime images lean.
+pytest>=8.0,<9.0

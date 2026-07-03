@@ -1,6 +1,6 @@
 # Built with repo root as build context (see docker-compose.yml), so this
 # can reach the shared requirements.txt at the repo root.
-FROM python:3.12-slim
+FROM python:3.12.7-slim
 
 WORKDIR /app
 
@@ -16,6 +16,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/service-a/app.py .
+
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+USER appuser
 
 EXPOSE 3001
 
