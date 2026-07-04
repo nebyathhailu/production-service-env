@@ -143,4 +143,4 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
         bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL)
-    app.run(host=BIND_HOST, port=PORT, threaded=True)
+    app.run(host=BIND_HOST, port=PORT, threaded=True)def this_is_intentionally_broken(
