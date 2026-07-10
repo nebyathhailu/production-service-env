@@ -1,12 +1,22 @@
-from flask import Flask, request, jsonify
-import requests
+from flask import Flask, request, jsonify, g
+import requests as http_client
 import json
 import logging
+import signal
+import time
 import uuid
 import os
-import signal
 import sys
 from datetime import datetime, timezone
+
+# ── OpenTelemetry setup ───────────────────────────────────────────────────────
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
 from metrics import init_metrics
 
@@ -21,131 +31,248 @@ PORT = int(os.environ.get("SERVICE_A_PORT", "3001"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
 SERVICE_B_URL = os.environ.get("SERVICE_B_URL", "http://service-b.internal:3002").rstrip("/")
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
+OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
 
 # Prometheus metrics: request counters/latency histogram + /metrics endpoint.
 init_metrics(app, SERVICE_NAME)
 
 
+def _setup_tracing():
+    if "pytest" in sys.modules:
+        return
+    resource = Resource(attributes={"service.name": SERVICE_NAME})
+    provider = TracerProvider(resource=resource)
+    _base = OTEL_ENDPOINT.rstrip("/")
+    if _base.endswith("/v1/traces"):
+        _base = _base[: -len("/v1/traces")]
+    exporter = OTLPSpanExporter(endpoint=f"{_base}/v1/traces")
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    otel_trace.set_tracer_provider(provider)
+    FlaskInstrumentor().instrument_app(app)
+    # Auto-propagates traceparent on every requests.get/post call
+    RequestsInstrumentor().instrument()
+
+
+_setup_tracing()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def iso_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def log(event, request_id, path, status, **extra):
+def _trace_id():
+    span = otel_trace.get_current_span()
+    ctx = span.get_span_context()
+    if ctx and ctx.is_valid:
+        return format(ctx.trace_id, "032x")
+    return None
+
+
+def log(event, request_id, path, status, level="INFO", **extra):
     entry = {
         "timestamp": iso_now(),
         "service": SERVICE_NAME,
+        "level": level,
         "event": event,
         "request_id": request_id,
         "path": path,
         "status": status,
     }
+    tid = _trace_id()
+    if tid:
+        entry["trace_id"] = tid
     entry.update(extra)
     sys.stdout.write(json.dumps(entry) + "\n")
     sys.stdout.flush()
 
 
 def get_request_id():
-    return request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    return getattr(g, "request_id", None) or request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
 def client_ip():
-    # Nginx forwards the real caller in X-Forwarded-For/X-Real-IP; fall back to
-    # the socket peer when called directly.
     xff = request.headers.get("X-Forwarded-For")
     if xff:
         return xff.split(",")[0].strip()
     return request.headers.get("X-Real-IP") or request.remote_addr
 
 
-# ── 1. health check ──────────────────────────────────────────────────
-@app.route('/health')
-def health():
-    rid = get_request_id()
-    log("health_check", rid, request.path, 200, method=request.method, client_ip=client_ip())
-    return jsonify({
-        "service": SERVICE_NAME,
-        "status": "healthy",
-        "port": PORT,
-        "message": f"Hello {SERVICE_NAME} listening on {PORT}"
-    }), 200
+def _ms():
+    return round((time.time() - g.start_time) * 1000, 2) if hasattr(g, "start_time") else None
 
 
-# ── 2. start the full request flow ───────────────────────────────────
-# GET is the contract-defined trigger for this endpoint (Service API & Logging
-# Contract). It carries no request body and is safe to re-issue — the only
-# state-changing hop in the flow is C's POST callback to /greeting-rcvd below.
-# POST is also accepted so a demo can drive the flow with either verb.
-@app.route('/greet-service-b', methods=['GET', 'POST'])
-def greet_service_b():
-    rid = get_request_id()
-    log("request_received", rid, request.path, 200, method=request.method, client_ip=client_ip())
+# ── Request lifecycle hooks ───────────────────────────────────────────────────
 
-    try:
-        response = requests.get(
-            f"{SERVICE_B_URL}/greet",
-            headers={"X-Request-ID": rid},
-            timeout=DOWNSTREAM_TIMEOUT
-        )
-        response.raise_for_status()
-        log("request_forwarded", rid, request.path,
-            response.status_code, method=request.method, target="service-b")
-
-        return jsonify({
-            "request_id": rid,
-            "status": "success",
-            "message": "Request completed successfully"
-        }), 200
-
-    except requests.exceptions.RequestException as e:
-        log("request_failed", rid, request.path, 502,
-            method=request.method, error=str(e))
-        return jsonify({
-            "request_id": rid,
-            "status": "error",
-            "message": "Service B unreachable"
-        }), 502
+@app.before_request
+def _start_timer():
+    g.start_time = time.time()
+    g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
-# ── 3. receive callback from Service C ───────────────────────────────
-@app.route('/greeting-rcvd', methods=['POST'])
-def greeting_received():
-    data = request.get_json(silent=True) or {}
-    rid = data.get('request_id', 'unknown')
-
-    log("callback_received", rid, request.path, 200,
-        source_service=data.get('source_service'),
-        message=data.get('message'))
-
-    return jsonify({"status": "received"}), 200
-
-
-# ── 4. catch all unknown routes ──────────────────────────────────────
-@app.errorhandler(404)
-def not_found(e):
-    rid = get_request_id()
-    log("route_not_found", rid, request.path, 404, method=request.method, client_ip=client_ip())
-    return jsonify({"error": "route not found", "path": request.path}), 404
-
-
-# ── echo request ID on every response ────────────────────────────────
 @app.after_request
 def add_request_id_header(resp):
     resp.headers.setdefault("X-Request-ID", get_request_id())
     return resp
 
 
-# ── shutdown lifecycle event ─────────────────────────────────────────
-# systemd sends SIGTERM on `systemctl stop`; log a structured shutdown event
-# (mirrors service_started) so the journal shows a clean lifecycle, then exit.
+# ── 1. Health check — dependency-aware ───────────────────────────────────────
+@app.route("/health")
+def health():
+    rid = get_request_id()
+    deps = {}
+    overall = "healthy"
+
+    try:
+        r = http_client.get(f"{SERVICE_B_URL}/health", timeout=2)
+        deps["service-b"] = "ok" if r.status_code == 200 else "degraded"
+    except http_client.RequestException:
+        deps["service-b"] = "unreachable"
+        overall = "degraded"
+
+    log("health_check", rid, request.path, 200,
+        method=request.method, client_ip=client_ip(), dependencies=deps, duration_ms=_ms())
+    return jsonify({
+        "service": SERVICE_NAME,
+        "status": overall,
+        "port": PORT,
+        "message": f"Hello {SERVICE_NAME} listening on {PORT}",
+        "dependencies": deps,
+    }), 200
+
+
+# ── 2. Start the full request flow ───────────────────────────────────────────
+@app.route("/greet-service-b", methods=["GET", "POST"])
+def greet_service_b():
+    rid = get_request_id()
+    log("request_received", rid, request.path, 200,
+        method=request.method, client_ip=client_ip())
+
+    try:
+        # RequestsInstrumentor propagates traceparent automatically
+        response = http_client.get(
+            f"{SERVICE_B_URL}/greet",
+            headers={"X-Request-ID": rid},
+            timeout=DOWNSTREAM_TIMEOUT,
+        )
+        response.raise_for_status()
+        log("request_forwarded", rid, request.path, response.status_code,
+            method=request.method, target="service-b", duration_ms=_ms())
+        return jsonify({
+            "request_id": rid,
+            "status": "success",
+            "message": "Request completed successfully",
+        }), 200
+
+    except http_client.RequestException as e:
+        log("request_failed", rid, request.path, 502, level="ERROR",
+            method=request.method, error=str(e), duration_ms=_ms())
+        return jsonify({
+            "request_id": rid,
+            "status": "error",
+            "message": "Service B unreachable",
+        }), 502
+
+
+# ── 3. Receive callback from Service C ───────────────────────────────────────
+@app.route("/greeting-rcvd", methods=["POST"])
+def greeting_received():
+    data = request.get_json(silent=True) or {}
+    rid = data.get("request_id", get_request_id())
+    log("callback_received", rid, request.path, 200,
+        source_service=data.get("source_service"),
+        message=data.get("message"),
+        duration_ms=_ms())
+    return jsonify({"status": "received"}), 200
+
+
+# ── 4. Failure simulation endpoints (lab-only) ────────────────────────────────
+
+@app.route("/fail")
+def fail():
+    rid = get_request_id()
+    log("fail_triggered", rid, request.path, 500, level="ERROR",
+        method=request.method, duration_ms=_ms())
+    return jsonify({
+        "request_id": rid,
+        "status": "error",
+        "message": "Simulated hard failure",
+    }), 500
+
+
+@app.route("/slow")
+def slow():
+    rid = get_request_id()
+    try:
+        delay = float(request.args.get("delay", 3))
+    except ValueError:
+        return jsonify({"request_id": rid, "status": "error",
+                        "message": "delay must be a number"}), 400
+    delay = max(0.0, min(delay, 30.0))
+    log("slow_triggered", rid, request.path, 200, level="WARN",
+        method=request.method, delay_s=delay)
+    time.sleep(delay)
+    log("slow_completed", rid, request.path, 200,
+        method=request.method, delay_s=delay, duration_ms=_ms())
+    return jsonify({
+        "request_id": rid,
+        "status": "ok",
+        "message": f"Slept {delay}s",
+    }), 200
+
+
+@app.route("/error")
+def error():
+    rid = get_request_id()
+    log("error_triggered", rid, request.path, 500, level="ERROR",
+        method=request.method)
+    raise RuntimeError("Simulated internal error for observability demo")
+
+
+@app.route("/dependency-fail")
+def dependency_fail():
+    rid = get_request_id()
+    log("dependency_fail_triggered", rid, request.path, 502, level="ERROR",
+        method=request.method, duration_ms=_ms())
+    return jsonify({
+        "request_id": rid,
+        "status": "error",
+        "message": "Simulated dependency failure — service-b reported error",
+    }), 502
+
+
+# ── 5. Error handlers ─────────────────────────────────────────────────────────
+
+@app.errorhandler(404)
+def not_found(e):
+    rid = get_request_id()
+    log("route_not_found", rid, request.path, 404, level="WARN",
+        method=request.method, client_ip=client_ip())
+    return jsonify({"error": "route not found", "path": request.path}), 404
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    rid = get_request_id()
+    log("internal_error", rid, request.path, 500, level="ERROR",
+        method=request.method, error=str(e))
+    return jsonify({"request_id": rid, "status": "error",
+                    "message": "Internal server error"}), 500
+
+
+# ── Shutdown lifecycle ────────────────────────────────────────────────────────
+
 def _handle_shutdown(signum, _frame):
     log("service_stopping", "-", "-", 200, signal=signal.Signals(signum).name)
     sys.exit(0)
 
 
-# ── start the server ─────────────────────────────────────────────────
-if __name__ == '__main__':
+# ── Start the server ──────────────────────────────────────────────────────────
+if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
-        bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL)
+        bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL,
+        otel_endpoint=OTEL_ENDPOINT)
     app.run(host=BIND_HOST, port=PORT, threaded=True)

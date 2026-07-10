@@ -79,6 +79,7 @@ docker compose exec service-a curl -s http://localhost:3001/metrics   # raw metr
 
 Each rule documents its meaning, likely causes, reproduction, first checks, and how to confirm normal state in the annotations of `alert-rules.yml`. Confirm an alert by triggering it (e.g. `docker compose stop service-b`), then watching it move `Pending → Firing` at `http://localhost:9090/alerts`, and clear again after `docker compose start service-b`.
 
+
 ## Container CI/CD Deployment
 
 GitHub Actions (`.github/workflows/container-ci-cd.yml`) automates verification, packaging, and publishing for the containerized stack:
