@@ -63,13 +63,14 @@ export function stressTraffic() {
   check(res, { "stress: got a response": (r) => r.status !== 0 });
 }
 
-// Failure traffic: hits the lab-only controlled-failure endpoints so the
-// error-rate and latency alerts have something real to fire on. Adjust the
-// paths below once Person 2's /fail and /slow endpoints are wired up.
+// Failure traffic: hits the lab-only controlled-failure endpoint so the
+// error-rate alert has something real to fire on. /fail always returns 500
+// (see services/service-a/app.py) - asserting that exact code, not just
+// "got a response", makes this a real correctness check on the failure path.
 export function failureTraffic() {
   const res = http.get(`${BASE_URL}/service-a/fail`, {
     tags: { scenario: "failure" },
   });
-  check(res, { "failure: request completed (any status)": (r) => r.status !== 0 });
+  check(res, { "failure: returns 500 as expected": (r) => r.status === 500 });
   sleep(0.5);
 }
