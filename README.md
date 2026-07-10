@@ -136,7 +136,7 @@ docker compose up --build -d
 
 | Tool | URL | Purpose |
 |------|-----|---------|
-| Grafana | http://localhost:3000 | Central dashboard — service health, request rate, error rate, p95 latency, alert state. Anonymous viewer access enabled; admin login is `admin`/`admin`. |
+| Grafana | http://localhost:3000 | Central dashboard — service health, request rate, error rate, p95 latency, alert state. Anonymous viewer access enabled; admin login is `admin`/`${GRAFANA_ADMIN_PASSWORD:-admin}` (set in `.env`, see `.env.example`). |
 | Prometheus | http://localhost:9090 | Raw metrics + alert rule evaluation. Check **Status → Targets** to confirm all three services show `UP`. |
 | Jaeger | http://localhost:16686 | Distributed traces. Search by service name to see the full request path across service-a → service-b → service-c. |
 
@@ -157,7 +157,7 @@ curl http://localhost:8080/service-a/fail    # Failure C: high error rate
 
 **View metrics / traces / logs:**
 ```
-curl http://localhost:8080/service-a/metrics   # raw Prometheus text output (once instrumented)
+curl http://localhost:8080/service-a/metrics   # raw Prometheus text output
 docker compose logs -f service-a               # structured JSON logs, same as base lab
 # Traces: open http://localhost:16686, search by service name
 ```
