@@ -12,19 +12,36 @@ services:
     networks:
       - appnet
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI — open http://localhost:16686 to browse traces
+      - "4318:4318"     # OTLP HTTP — services send spans here
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - appnet
+
   service-a:
     build:
       context: .
       dockerfile: services/service-a/Dockerfile
     environment:
       SERVICE_A_PORT: "3001"
-      BIND_HOST: "0.0.0.0"   # must bind to all interfaces inside the container
-                              # so other containers (Nginx) can reach it over
-                              # the Compose network - 127.0.0.1 here would only
-                              # mean "this container", not "from Nginx".
+      BIND_HOST: "0.0.0.0"
       SERVICE_B_URL: "http://service-b:3002"
       DOWNSTREAM_TIMEOUT: "5"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: "service-a"
     depends_on:
+      jaeger:
+        condition: service_healthy
       service-b:
         condition: service_healthy
       service-c:
@@ -44,6 +61,11 @@ services:
       BIND_HOST: "0.0.0.0"
       SERVICE_C_URL: "http://service-c:3003"
       DOWNSTREAM_TIMEOUT: "5"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: "service-b"
+    depends_on:
+      jaeger:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
@@ -59,6 +81,11 @@ services:
       BIND_HOST: "0.0.0.0"
       SERVICE_A_URL: "http://service-a:3001"
       DOWNSTREAM_TIMEOUT: "5"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: "service-c"
+    depends_on:
+      jaeger:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
