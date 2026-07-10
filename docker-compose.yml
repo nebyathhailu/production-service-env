@@ -64,6 +64,23 @@ services:
       - appnet
     # No "ports:" - internal-only, same reasoning as service-b.
 
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    # Config mounted at Prometheus' default path, so no custom command is needed.
+    # Metrics persist to a named volume (survives container recreation).
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"   # published so a reviewer can open the Prometheus UI/targets
+    restart: unless-stopped
+    networks:
+      - appnet
+
 networks:
   appnet:
     driver: bridge
+
+volumes:
+  prometheus-data:

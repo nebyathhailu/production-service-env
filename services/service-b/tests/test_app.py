@@ -55,3 +55,20 @@ def test_response_echoes_request_id_header():
     client = make_client()
     resp = client.get("/health", headers={"X-Request-ID": "test-rid-456"})
     assert resp.headers["X-Request-ID"] == "test-rid-456"
+
+
+def test_metrics_endpoint_exposes_prometheus():
+    client = make_client()
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "http_requests_total" in body
+    assert "service_up" in body
+
+
+def test_request_is_counted_by_route():
+    client = make_client()
+    client.get("/health")
+    body = client.get("/metrics").get_data(as_text=True)
+    assert 'http_requests_total{' in body
+    assert 'route="/health"' in body

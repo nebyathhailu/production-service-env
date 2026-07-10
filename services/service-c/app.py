@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 import requests
 
+from metrics import init_metrics
+
 # Silence Werkzeug's unstructured access log; we emit our own structured JSON.
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
@@ -20,6 +22,9 @@ SERVICE_A_URL = os.environ.get("SERVICE_A_URL", "http://service-a.internal:3001"
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
 
 app = Flask(__name__)
+
+# Prometheus metrics: request counters/latency histogram + /metrics endpoint.
+init_metrics(app, SERVICE_NAME)
 
 
 def iso_now():
