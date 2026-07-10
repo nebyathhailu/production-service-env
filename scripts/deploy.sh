@@ -25,5 +25,5 @@ fi
 echo "Deploying ${APP_NAME} using image tag: ${IMAGE_TAG}"
 
 docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d --remove-orphans
+docker compose -f docker-compose.prod.yml up -d --remove-orphans --wait
 docker compose -f docker-compose.prod.yml ps

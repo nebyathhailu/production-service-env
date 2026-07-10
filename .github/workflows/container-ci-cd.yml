@@ -65,15 +65,16 @@ jobs:
         run: docker compose build --pull
 
       - name: Start Compose stack
-        run: docker compose up -d
+        run: docker compose up -d --wait
 
       - name: Show running services
         run: docker compose ps
 
       - name: Check gateway health
-        run: |
-          sleep 10
-          curl --fail http://localhost:8080/service-a/health
+        # --retry-connrefused covers the brief window where nginx is "running"
+        # (so --wait returns) but its worker hasn't bound :80 yet. nginx has no
+        # healthcheck for --wait to gate on, so retry here instead of a fixed sleep.
+        run: curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://localhost:8080/service-a/health
 
       - name: Stop Compose stack
         if: always()
