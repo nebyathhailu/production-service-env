@@ -52,7 +52,7 @@
       "gridPos": { "h": 8, "w": 9, "x": 15, "y": 0 },
       "targets": [
         {
-          "expr": "sum by (service) (rate(http_errors_total[1m]))",
+          "expr": "sum by (service) (rate(http_requests_total{status_code=~\"5..\"}[1m]))",
           "legendFormat": "{{service}}",
           "refId": "A"
         }

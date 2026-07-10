@@ -1,46 +1,53 @@
-# Prometheus alert rules. See docs/architecture.md and README "Alerts"
-# section for reproduction/verification steps for each of these.
+# Prometheus alert rules for the three services.
+# Each alert documents (in annotations): what it means, likely causes, how to
+# reproduce it, first checks, and how to confirm a return to normal.
 groups:
-  - name: service-env-alerts
+  - name: service-alerts
     rules:
+      # ---------------------------------------------------------------------
       - alert: ServiceDown
-        expr: service_up == 0
+        # up == 0 means Prometheus could not scrape the target's /metrics.
+        expr: up{job=~"service-.*"} == 0
         for: 30s
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.service }} is down"
-          description: >
-            service_up reported 0 for {{ $labels.service }} for at least 30s.
-            Reproduce: docker compose stop <service>.
-            First check: docker compose ps, docker compose logs <service>.
+          summary: "{{ $labels.job }} is down"
+          meaning: "Prometheus cannot scrape {{ $labels.job }} for 30s - the container is stopped, crashed, or unreachable on the network."
+          causes: "Container stopped/crashed; wrong port; service not bound to 0.0.0.0; app network issue."
+          reproduce: "docker compose stop service-b"
+          first_checks: "docker compose ps; docker compose logs service-b; Prometheus > Status > Targets."
+          normal_state: "up{job=\"service-b\"} == 1 and the target is UP in Prometheus; recover with `docker compose start service-b`."
 
+      # ---------------------------------------------------------------------
       - alert: HighErrorRate
-        expr: sum by (service) (rate(http_errors_total[2m])) > 0.1
+        # >0.1 5xx responses/sec for a service, sustained for 1m. Derived from
+        # http_requests_total's status_code label (no separate http_errors_total
+        # counter is exposed by the services) - verified live against the
+        # actual /metrics output before wiring this up.
+        expr: sum by (service) (rate(http_requests_total{status_code=~"5.."}[2m])) > 0.1
         for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "High error rate on {{ $labels.service }}"
-          description: >
-            More than 0.1 errors/sec (sustained) on {{ $labels.service }}.
-            Reproduce: hit the service's /fail (or /dependency-fail) endpoint
-            repeatedly, e.g. via scripts/load-test.js failure scenario.
-            First check: docker compose logs <service> for request_failed
-            events; confirm downstream dependency health.
+          summary: "High 5xx error rate on {{ $labels.service }}"
+          meaning: "{{ $labels.service }} is returning 5xx responses faster than 0.1/sec - a downstream dependency or the service itself is failing."
+          causes: "Downstream service down (502 from the chain); unhandled exception; the lab-only failure endpoint being exercised."
+          reproduce: "Drive the /error or /dependency-fail endpoint under load (see scripts/load-test), or `docker compose stop service-c` and hit the chain."
+          first_checks: "Grafana error-rate panel; `docker compose logs service-a | grep request_failed`; Jaeger trace of a failing request."
+          normal_state: "rate(http_requests_total{status_code=~\"5..\"}[2m]) returns to ~0 for the service once the dependency recovers."
 
+      # ---------------------------------------------------------------------
       - alert: HighLatency
-        expr: >
-          histogram_quantile(0.95,
-            sum by (le, service) (rate(http_request_duration_seconds_bucket[5m]))
-          ) > 0.5
-        for: 1m
+        # p95 request latency over 0.5s for a service, sustained for 2m.
+        expr: histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "p95 latency above 500ms on {{ $labels.service }}"
-          description: >
-            p95 request duration for {{ $labels.service }} exceeded 500ms over
-            a 5m window. Reproduce: hit the service's /slow endpoint, or run
-            scripts/load-test.js stress scenario.
-            First check: Jaeger trace for the slow span; Grafana p95 panel.
+          summary: "High p95 latency on {{ $labels.service }}"
+          meaning: "95th-percentile request duration for {{ $labels.service }} is above 500ms for 2m - requests are slow, not necessarily failing."
+          causes: "Slow downstream call; resource contention under load; the lab-only /slow endpoint."
+          reproduce: "Run the stress scenario in scripts/load-test, or exercise the /slow endpoint."
+          first_checks: "Grafana p95 panel; Jaeger - open a slow trace and find the span carrying the latency."
+          normal_state: "p95 returns below 0.5s once load or the slow dependency clears."
