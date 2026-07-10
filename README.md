@@ -123,6 +123,50 @@ curl http://localhost:8080/service-a/health
 
 `docker-compose.prod.yml` pulls pre-built images from Docker Hub (`image:`) instead of building locally (`build:`) — the same network isolation as the dev stack applies: only Nginx publishes a host port (`8080`), and the `backend` network is `internal: true` so `service-b`/`service-c` are unreachable from the host even by container name.
 
+## Observability (Metrics, Logs, Traces, Alerts)
+
+`docker-compose.yml` now includes a MELT observability layer alongside the three services: **Prometheus** (metrics), **Jaeger** (distributed tracing), and **Grafana** (central operating view). See [docs/architecture.md](docs/architecture.md) for the full telemetry-flow diagram.
+
+**Start the stack** (same command as before — observability containers come up alongside the app):
+```
+docker compose up --build -d
+```
+
+**Access each tool:**
+
+| Tool | URL | Purpose |
+|------|-----|---------|
+| Grafana | http://localhost:3000 | Central dashboard — service health, request rate, error rate, p95 latency, alert state. Anonymous viewer access enabled; admin login is `admin`/`admin`. |
+| Prometheus | http://localhost:9090 | Raw metrics + alert rule evaluation. Check **Status → Targets** to confirm all three services show `UP`. |
+| Jaeger | http://localhost:16686 | Distributed traces. Search by service name to see the full request path across service-a → service-b → service-c. |
+
+**Run the load test** (see [docs/benchmark-report.md](docs/benchmark-report.md) for recorded results):
+```
+k6 run scripts/load-test.js                    # all three scenarios back-to-back
+k6 run -e SCENARIO=normal  scripts/load-test.js
+k6 run -e SCENARIO=stress  scripts/load-test.js
+k6 run -e SCENARIO=failure scripts/load-test.js
+```
+
+**Trigger a controlled failure** (for demoing alerts/traces/logs together):
+```
+docker compose stop service-b        # Failure A: service down
+curl http://localhost:8080/service-a/slow    # Failure B: high latency
+curl http://localhost:8080/service-a/fail    # Failure C: high error rate
+```
+
+**View metrics / traces / logs:**
+```
+curl http://localhost:8080/service-a/metrics   # raw Prometheus text output (once instrumented)
+docker compose logs -f service-a               # structured JSON logs, same as base lab
+# Traces: open http://localhost:16686, search by service name
+```
+
+**Confirm an alert fired:**
+1. Trigger the matching failure (above).
+2. Open Prometheus → **Alerts** (http://localhost:9090/alerts) — the rule should move from `pending` to `firing`.
+3. Or check the "Alert State" panel on the Grafana dashboard.
+
 ## Overview
 
 Three independent Python/Flask HTTP services sit behind an Nginx reverse proxy. Only **Service A** is public (through Nginx on port 80); **Service B** and **Service C** are internal-only. A single request flows through all of them and is traceable end to end by a shared `X-Request-ID`:
