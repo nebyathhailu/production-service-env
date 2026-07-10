@@ -16,9 +16,6 @@ COPY services/service-c/*.py .
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser
 
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
-USER appuser
-
 EXPOSE 3003
 
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 --start-period=5s \
