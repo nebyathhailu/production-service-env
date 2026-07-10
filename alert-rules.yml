@@ -21,8 +21,11 @@ groups:
 
       # ---------------------------------------------------------------------
       - alert: HighErrorRate
-        # >0.1 5xx responses/sec for a service, sustained for 1m.
-        expr: sum by (service) (rate(http_errors_total[2m])) > 0.1
+        # >0.1 5xx responses/sec for a service, sustained for 1m. Derived from
+        # http_requests_total's status_code label (no separate http_errors_total
+        # counter is exposed by the services) - verified live against the
+        # actual /metrics output before wiring this up.
+        expr: sum by (service) (rate(http_requests_total{status_code=~"5.."}[2m])) > 0.1
         for: 1m
         labels:
           severity: warning
@@ -32,7 +35,7 @@ groups:
           causes: "Downstream service down (502 from the chain); unhandled exception; the lab-only failure endpoint being exercised."
           reproduce: "Drive the /error or /dependency-fail endpoint under load (see scripts/load-test), or `docker compose stop service-c` and hit the chain."
           first_checks: "Grafana error-rate panel; `docker compose logs service-a | grep request_failed`; Jaeger trace of a failing request."
-          normal_state: "rate(http_errors_total[2m]) returns to ~0 for the service once the dependency recovers."
+          normal_state: "rate(http_requests_total{status_code=~\"5..\"}[2m]) returns to ~0 for the service once the dependency recovers."
 
       # ---------------------------------------------------------------------
       - alert: HighLatency

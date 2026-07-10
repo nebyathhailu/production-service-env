@@ -1,0 +1,14 @@
+# Auto-provisions Prometheus as a Grafana data source on container start,
+# so a fresh `docker compose up` gives a working data source with no
+# manual clicking in the Grafana UI.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # "prometheus" is the Compose service name - resolved via Docker's
+    # internal DNS, same pattern as service-a/b/c calling each other.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

@@ -1,0 +1,14 @@
+# Tells Grafana to auto-load any dashboard JSON dropped into
+# /var/lib/grafana/dashboards (mounted from ./grafana/dashboards) on start,
+# instead of requiring someone to import it by hand through the UI.
+apiVersion: 1
+
+providers:
+  - name: service-env-dashboards
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
