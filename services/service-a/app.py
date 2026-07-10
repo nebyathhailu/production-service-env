@@ -8,6 +8,8 @@ import signal
 import sys
 from datetime import datetime, timezone
 
+from metrics import init_metrics
+
 app = Flask(__name__)
 
 # Silence Werkzeug's unstructured access log
@@ -19,6 +21,9 @@ PORT = int(os.environ.get("SERVICE_A_PORT", "3001"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
 SERVICE_B_URL = os.environ.get("SERVICE_B_URL", "http://service-b.internal:3002").rstrip("/")
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
+
+# Prometheus metrics: request counters/latency histogram + /metrics endpoint.
+init_metrics(app, SERVICE_NAME)
 
 
 def iso_now():

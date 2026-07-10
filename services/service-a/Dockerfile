@@ -15,7 +15,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY services/service-a/app.py .
+COPY services/service-a/*.py .
 
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser

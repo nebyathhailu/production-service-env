@@ -1,0 +1,27 @@
+# Prometheus scrape + rule configuration.
+# Services are addressed by Docker Compose service name (not localhost), on the
+# same app network. Each service exposes Prometheus metrics at /metrics on its
+# app port. The job_name becomes the `job` label used by the ServiceDown alert.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "service-a"
+    static_configs:
+      - targets: ["service-a:3001"]
+
+  - job_name: "service-b"
+    static_configs:
+      - targets: ["service-b:3002"]
+
+  - job_name: "service-c"
+    static_configs:
+      - targets: ["service-c:3003"]

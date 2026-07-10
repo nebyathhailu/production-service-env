@@ -44,6 +44,41 @@ docker compose down                  # stop and remove containers + network
 docker compose down -v                # also remove the (unused, stateless) volumes
 ```
 
+## Observability — Metrics & Alerting
+
+Each service exposes Prometheus metrics; a `prometheus` container scrapes them and evaluates alert rules. (Grafana and Jaeger are added in the observability lab’s other pillars.)
+
+**What each service exposes** at `/metrics`:
+
+| Metric | Type | Labels | Answers |
+|--------|------|--------|---------|
+| `http_requests_total` | counter | service, method, route, status_code | traffic / how many requests |
+| `http_request_duration_seconds` | histogram | service, method, route | latency (p95 via `histogram_quantile`) |
+| `http_errors_total` | counter | service, method, route, status_code | how many 5xx |
+| `service_up` | gauge | service | is the process running |
+
+**View metrics**
+```
+docker compose up -d --build
+curl -s http://localhost:8080/service-a/health          # generate some traffic
+docker compose exec service-a curl -s http://localhost:3001/metrics   # raw metrics
+# Prometheus UI (targets should all be UP):  http://localhost:9090/targets
+# Example queries in Prometheus:
+#   sum by (service) (rate(http_requests_total[1m]))                              # request rate
+#   sum by (service) (rate(http_errors_total[2m]))                               # error rate
+#   histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[5m])))  # p95
+```
+
+**Alerts** (`alert-rules.yml`, loaded by Prometheus — see `http://localhost:9090/alerts`):
+
+| Alert | Fires when | Reproduce |
+|-------|-----------|-----------|
+| `ServiceDown` | `up{job=~"service-.*"} == 0` for 30s | `docker compose stop service-b` |
+| `HighErrorRate` | 5xx rate > 0.1/s (per service) for 1m | drive a failure endpoint / stop a downstream under load |
+| `HighLatency` | p95 > 0.5s (per service) for 2m | run the stress load test / `/slow` endpoint |
+
+Each rule documents its meaning, likely causes, reproduction, first checks, and how to confirm normal state in the annotations of `alert-rules.yml`. Confirm an alert by triggering it (e.g. `docker compose stop service-b`), then watching it move `Pending → Firing` at `http://localhost:9090/alerts`, and clear again after `docker compose start service-b`.
+
 ## Container CI/CD Deployment
 
 GitHub Actions (`.github/workflows/container-ci-cd.yml`) automates verification, packaging, and publishing for the containerized stack:
