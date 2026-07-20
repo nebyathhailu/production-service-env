@@ -724,6 +724,19 @@ including the small dumb ones.
 | Repair | Installed the plugin (`brew install --cask session-manager-plugin`), confirmed it was on `PATH` (`session-manager-plugin --version`), then re-ran the exact same `execute-command`, which succeeded and returned real output (`ECS_EXEC_WORKS`, `whoami` → `root`) from inside the running container. |
 | Prevention | Install the Session Manager plugin on every team member's machine before anyone attempts ECS Exec, rather than discovering it's missing mid-test — this matches the assignment's own listed prerequisite ("Session Manager support on the engineer machine") under the ECS Exec section, which is easy to skim past on a first read. |
 
+### Entry 4 — traffic contract table missed the callback leg, exposing a second layered bug
+
+| Field | Entry |
+|---|---|
+| Symptom | A real end-to-end request through the ALB (`GET /request-ride`) returned `502 Matching service unreachable`, even though `/health` reported `matching-service: ok` and every individual service looked healthy. |
+| First hypothesis | Looked like a matching-service problem, since that's the error ride-api surfaced. |
+| Evidence | Traced the same `request_id` across CloudWatch logs for all three services in order. ride-api → matching-service: succeeded. matching-service → dispatch-service: succeeded. dispatch-service → ride-api callback (`POST /driver-assigned`): failed. The failure two hops away was masking as a matching-service error at the front of the chain. |
+| Actual cause (layer 1) | The traffic contract table in Section 5.4 only modeled the forward request chain (ALB→ride-api→matching-service→dispatch-service) and never listed the callback edge (dispatch-service→ride-api). No security group rule existed allowing dispatch-service's SG to reach ride-api on port 3001, so the callback was blocked at the network layer. |
+| Repair (layer 1) | Added an ingress rule on `ride-api-sg` allowing port 3001 from `dispatch-service-sg`. Confirmed via `describe-security-groups` that the rule was present. |
+| Actual cause (layer 2) | Re-testing the same end-to-end request after the security group fix still failed, with a different, more specific error from dispatch-service's own logs: `NameResolutionError("Failed to resolve 'ride-api' ([Errno -2] Name or service not known)")`. This was DNS resolution failing inside Service Connect, not a firewall block — a second, independent bug that had been hidden behind the first one the whole time. |
+| Repair (layer 2) | In progress — requires the dispatch-service owner to correct dispatch-service's Service Connect / Cloud Map wiring so it can resolve `ride-api` by name inside the `group1.internal` namespace. Not something the ride-api owner can fix from ride-api's own resources. |
+| Prevention | When modeling traffic contracts, explicitly check for callback/response paths, not just the "forward" request chain — a service that only *receives* traffic in the diagram may still need to *send* traffic back out. Also: don't stop testing after the first fix resolves the symptom's error message — re-run the actual end-to-end request and read the next hop's logs, since a second unrelated bug can be hiding directly behind the first one. |
+
 ---
 
 ## 13. Live Demo Prep Checklist (Wednesday, July 22)
