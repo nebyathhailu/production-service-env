@@ -42,7 +42,7 @@ section() { printf '\n==================== %s ====================\n' "$1"; }
     "$REPO_ROOT/scripts/test-end-to-end.sh"
 
     section "5. Happy-path trace (one request_id across Nginx + A + B + C)"
-    RID=$(curl -s http://localhost/service-a/greet-service-b \
+    RID=$(curl -s http://localhost/service-a/expenses \
         | grep -o '"request_id":"[^"]*"' | cut -d'"' -f4)
     echo "request_id = $RID"
     echo "--- service logs (journald) ---"
@@ -55,7 +55,7 @@ section() { printf '\n==================== %s ====================\n' "$1"; }
     sudo systemctl stop service-b
     echo "service-a is-active after stopping B: $(systemctl is-active service-a)"
     echo "--- public call while B is down ---"
-    curl -s http://localhost/service-a/greet-service-b; echo
+    curl -s http://localhost/service-a/expenses; echo
     journalctl -u service-a -o cat --since "30 sec ago" | grep request_failed | tail -1
     sudo systemctl start service-b
     echo "(service-b restarted)"

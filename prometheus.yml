@@ -14,14 +14,14 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  - job_name: "service-a"
+  - job_name: "expense-api"
     static_configs:
-      - targets: ["service-a:3001"]
+      - targets: ["expense-api:3001"]
 
-  - job_name: "service-b"
+  - job_name: "policy-service"
     static_configs:
-      - targets: ["service-b:3002"]
+      - targets: ["policy-service:3002"]
 
-  - job_name: "service-c"
+  - job_name: "approval-service"
     static_configs:
-      - targets: ["service-c:3003"]
+      - targets: ["approval-service:3003"]

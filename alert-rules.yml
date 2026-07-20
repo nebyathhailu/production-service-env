@@ -7,7 +7,7 @@ groups:
       # ---------------------------------------------------------------------
       - alert: ServiceDown
         # up == 0 means Prometheus could not scrape the target's /metrics.
-        expr: up{job=~"service-.*"} == 0
+        expr: up{job=~"expense-api|policy-service|approval-service"} == 0
         for: 30s
         labels:
           severity: critical
@@ -15,9 +15,9 @@ groups:
           summary: "{{ $labels.job }} is down"
           meaning: "Prometheus cannot scrape {{ $labels.job }} for 30s - the container is stopped, crashed, or unreachable on the network."
           causes: "Container stopped/crashed; wrong port; service not bound to 0.0.0.0; app network issue."
-          reproduce: "docker compose stop service-b"
-          first_checks: "docker compose ps; docker compose logs service-b; Prometheus > Status > Targets."
-          normal_state: "up{job=\"service-b\"} == 1 and the target is UP in Prometheus; recover with `docker compose start service-b`."
+          reproduce: "docker compose stop policy-service"
+          first_checks: "docker compose ps; docker compose logs policy-service; Prometheus > Status > Targets."
+          normal_state: "up{job=\"policy-service\"} == 1 and the target is UP in Prometheus; recover with `docker compose start policy-service`."
 
       # ---------------------------------------------------------------------
       - alert: HighErrorRate
@@ -33,8 +33,8 @@ groups:
           summary: "High 5xx error rate on {{ $labels.service }}"
           meaning: "{{ $labels.service }} is returning 5xx responses faster than 0.1/sec - a downstream dependency or the service itself is failing."
           causes: "Downstream service down (502 from the chain); unhandled exception; the lab-only failure endpoint being exercised."
-          reproduce: "Drive the /error or /dependency-fail endpoint under load (see scripts/load-test), or `docker compose stop service-c` and hit the chain."
-          first_checks: "Grafana error-rate panel; `docker compose logs service-a | grep request_failed`; Jaeger trace of a failing request."
+          reproduce: "Drive the /error or /dependency-fail endpoint under load (see scripts/load-test), or `docker compose stop approval-service` and hit the chain."
+          first_checks: "Grafana error-rate panel; `docker compose logs expense-api | grep expense_failed`; Jaeger trace of a failing request."
           normal_state: "rate(http_requests_total{status_code=~\"5..\"}[2m]) returns to ~0 for the service once the dependency recovers."
 
       # ---------------------------------------------------------------------

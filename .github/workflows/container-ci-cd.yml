@@ -74,7 +74,7 @@ jobs:
         # --retry-connrefused covers the brief window where nginx is "running"
         # (so --wait returns) but its worker hasn't bound :80 yet. nginx has no
         # healthcheck for --wait to gate on, so retry here instead of a fixed sleep.
-        run: curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://localhost:8080/service-a/health
+        run: curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://localhost:8080/api/health
 
       - name: Check observability stack is reachable
         run: |

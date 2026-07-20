@@ -28,9 +28,9 @@ check() {
 curl -s http://localhost/service-a/health | grep -q '"status":"healthy"'
 check "Service A health check (through Nginx)" "$?"
 
-# 2. Full request flow: Nginx -> A -> B -> C -> A callback.
-curl -s http://localhost/service-a/greet-service-b | grep -q '"status":"success"'
-check "Full request flow (A -> B -> C -> A callback)" "$?"
+# 2. Full request flow: Nginx -> expense-api -> policy -> approval -> callback.
+curl -s http://localhost/service-a/expenses | grep -q '"status":"approved"'
+check "Full expense flow (expense-api -> policy -> approval -> callback)" "$?"
 
 # 3. Service B must NOT be reachable through Nginx.
 code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/service-b)

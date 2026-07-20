@@ -6,7 +6,7 @@ services:
     volumes:
       - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      service-a:
+      expense-api:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -28,68 +28,75 @@ services:
     networks:
       - appnet
 
-  service-a:
+  # Public-facing entry point: accepts expense submissions, orchestrates the flow,
+  # receives the approval callback. (Built from services/service-a.)
+  expense-api:
     build:
       context: .
       dockerfile: services/service-a/Dockerfile
     environment:
-      SERVICE_A_PORT: "3001"
+      EXPENSE_API_PORT: "3001"
       BIND_HOST: "0.0.0.0"
-      SERVICE_B_URL: "http://service-b:3002"
+      POLICY_SERVICE_URL: "http://policy-service:3002"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-a"
+      OTEL_SERVICE_NAME: "expense-api"
     depends_on:
       jaeger:
         condition: service_healthy
-      service-b:
+      policy-service:
         condition: service_healthy
-      service-c:
+      approval-service:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - Service A is reachable on the Compose network (by Nginx)
-    # but not published to the host. The public route is entirely via Nginx.
+    # No "ports:" - reachable on the Compose network (by Nginx) but not published
+    # to the host. The public route is entirely via Nginx.
 
-  service-b:
+  # Internal: validates an expense against spending policy, forwards to approval.
+  # (Built from services/service-b.)
+  policy-service:
     build:
       context: .
       dockerfile: services/service-b/Dockerfile
     environment:
-      SERVICE_B_PORT: "3002"
+      POLICY_SERVICE_PORT: "3002"
       BIND_HOST: "0.0.0.0"
-      SERVICE_C_URL: "http://service-c:3003"
+      APPROVAL_SERVICE_URL: "http://approval-service:3003"
+      POLICY_MAX_AMOUNT: "500"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-b"
+      OTEL_SERVICE_NAME: "policy-service"
     depends_on:
       jaeger:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - internal-only. Reachable as "service-b:3002" from other
-    # containers on appnet, never reachable from the host or outside it.
+    # No "ports:" - internal-only. Reachable as "policy-service:3002" on appnet,
+    # never from the host.
 
-  service-c:
+  # Internal: approves the expense, records a ledger ref, calls back expense-api.
+  # (Built from services/service-c.)
+  approval-service:
     build:
       context: .
       dockerfile: services/service-c/Dockerfile
     environment:
-      SERVICE_C_PORT: "3003"
+      APPROVAL_SERVICE_PORT: "3003"
       BIND_HOST: "0.0.0.0"
-      SERVICE_A_URL: "http://service-a:3001"
+      EXPENSE_API_URL: "http://expense-api:3001"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-c"
+      OTEL_SERVICE_NAME: "approval-service"
     depends_on:
       jaeger:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - internal-only, same reasoning as service-b.
+    # No "ports:" - internal-only, same reasoning as policy-service.
 
   prometheus:
     image: prom/prometheus:v2.54.1

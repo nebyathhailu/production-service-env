@@ -11,31 +11,35 @@ docker compose up --build -d
 ```
 B and C must report `healthy` before A starts, and A must report `healthy` before Nginx starts - enforced by `depends_on: condition: service_healthy` in `docker-compose.yml`. This is the Compose equivalent of the VM version's systemd `ExecStartPre` readiness gate.
 
-**Test the public route**
+**Test the public route** (expense-reimbursement pipeline: expense-api → policy-service → approval-service → callback)
 ```
-curl -i http://localhost:8080/service-a/health
-curl -i http://localhost:8080/service-a/greet-service-b
+curl -i http://localhost:8080/api/health
+curl -i -X POST http://localhost:8080/api/expenses \
+  -H 'Content-Type: application/json' \
+  -d '{"expense_id":"EXP-1042","employee":"nebyat","amount":240,"category":"travel"}'   # -> "approved"
+curl -i -X POST http://localhost:8080/api/expenses \
+  -d '{"amount":5000,"category":"travel"}'                                              # -> "rejected" (over limit)
 ```
 
-**Prove B and C are internal-only**
+**Prove policy-service and approval-service are internal-only**
 ```
 curl -i --connect-timeout 3 http://localhost:3002/health   # connection refused - no host port published
 curl -i --connect-timeout 3 http://localhost:3003/health   # connection refused - no host port published
-docker compose ps                                            # B/C show "3002/tcp"/"3003/tcp", no host mapping
+docker compose ps                                            # they show "3002/tcp"/"3003/tcp", no host mapping
 ```
 
 **View logs**
 ```
-docker compose logs                  # everything
-docker compose logs -f service-a     # follow one service
+docker compose logs                    # everything
+docker compose logs -f expense-api     # follow one service
 docker compose logs | grep <request-id>   # trace one request across Nginx + all three services
 ```
 
 **Stop / restart a service**
 ```
-docker compose stop service-b        # Service A stays up, returns a graceful 502 for that one path
-docker compose start service-b       # recovers immediately, no other steps needed
-docker compose restart service-a
+docker compose stop policy-service     # expense-api stays up, returns a graceful 502 for that path
+docker compose start policy-service    # recovers immediately, no other steps needed
+docker compose restart expense-api
 ```
 
 **Shut everything down**
@@ -60,8 +64,8 @@ Each service exposes Prometheus metrics; a `prometheus` container scrapes them a
 **View metrics**
 ```
 docker compose up -d --build
-curl -s http://localhost:8080/service-a/health          # generate some traffic
-docker compose exec service-a curl -s http://localhost:3001/metrics   # raw metrics
+curl -s http://localhost:8080/api/health          # generate some traffic
+docker compose exec expense-api curl -s http://localhost:3001/metrics   # raw metrics
 # Prometheus UI (targets should all be UP):  http://localhost:9090/targets
 # Example queries in Prometheus:
 #   sum by (service) (rate(http_requests_total[1m]))                              # request rate
@@ -73,11 +77,11 @@ docker compose exec service-a curl -s http://localhost:3001/metrics   # raw metr
 
 | Alert | Fires when | Reproduce |
 |-------|-----------|-----------|
-| `ServiceDown` | `up{job=~"service-.*"} == 0` for 30s | `docker compose stop service-b` |
+| `ServiceDown` | `up{job=~"expense-api|policy-service|approval-service"} == 0` for 30s | `docker compose stop policy-service` |
 | `HighErrorRate` | 5xx rate > 0.1/s (per service) for 1m | drive a failure endpoint / stop a downstream under load |
 | `HighLatency` | p95 > 0.5s (per service) for 2m | run the stress load test / `/slow` endpoint |
 
-Each rule documents its meaning, likely causes, reproduction, first checks, and how to confirm normal state in the annotations of `alert-rules.yml`. Confirm an alert by triggering it (e.g. `docker compose stop service-b`), then watching it move `Pending → Firing` at `http://localhost:9090/alerts`, and clear again after `docker compose start service-b`.
+Each rule documents its meaning, likely causes, reproduction, first checks, and how to confirm normal state in the annotations of `alert-rules.yml`. Confirm an alert by triggering it (e.g. `docker compose stop policy-service`), then watching it move `Pending → Firing` at `http://localhost:9090/alerts`, and clear again after `docker compose start policy-service`.
 
 
 ## Container CI/CD Deployment
@@ -85,7 +89,7 @@ Each rule documents its meaning, likely causes, reproduction, first checks, and 
 GitHub Actions (`.github/workflows/container-ci-cd.yml`) automates verification, packaging, and publishing for the containerized stack:
 
 - **`verify`** (every PR + push to `main`): installs each service's Python dependencies, runs its `pytest` suite (`services/service-*/tests/`), and builds its Docker image locally. Never pushes images.
-- **`verify-compose`** (needs `verify`): validates `docker compose config`, builds the full stack, brings it up, curls the gateway health route (`http://localhost:8080/service-a/health`), and tears the stack down.
+- **`verify-compose`** (needs `verify`): validates `docker compose config`, builds the full stack, brings it up, curls the gateway health route (`http://localhost:8080/api/health`), and tears the stack down.
 - **`publish`** (needs `verify-compose`, only on push to `main`): logs into Docker Hub and pushes each service image tagged `sha-<short-commit-hash>` (never `latest`), with OCI labels for revision and source repo.
 
 Required repository configuration:
@@ -118,10 +122,10 @@ export APP_NAME=production-service-env
 
 ```bash
 docker compose -f docker-compose.prod.yml ps
-curl http://localhost:8080/service-a/health
+curl http://localhost:8080/api/health
 ```
 
-`docker-compose.prod.yml` pulls pre-built images from Docker Hub (`image:`) instead of building locally (`build:`) — the same network isolation as the dev stack applies: only Nginx publishes a host port (`8080`), and the `backend` network is `internal: true` so `service-b`/`service-c` are unreachable from the host even by container name.
+`docker-compose.prod.yml` pulls pre-built images from Docker Hub (`image:`) instead of building locally (`build:`) — the same network isolation as the dev stack applies: only Nginx publishes a host port (`8080`), and the `backend` network is `internal: true` so `policy-service`/`approval-service` are unreachable from the host even by container name.
 
 ## Observability (Metrics, Logs, Traces, Alerts)
 
@@ -150,16 +154,16 @@ k6 run -e SCENARIO=failure scripts/load-test.js
 
 **Trigger a controlled failure** (for demoing alerts/traces/logs together):
 ```
-docker compose stop service-b        # Failure A: service down
-curl http://localhost:8080/service-a/slow    # Failure B: high latency
-curl http://localhost:8080/service-a/fail    # Failure C: high error rate
+docker compose stop policy-service        # Failure A: service down
+curl http://localhost:8080/api/slow    # Failure B: high latency
+curl http://localhost:8080/api/fail    # Failure C: high error rate
 ```
 
 **View metrics / traces / logs:**
 ```
-curl http://localhost:8080/service-a/metrics   # raw Prometheus text output
-docker compose logs -f service-a               # structured JSON logs, same as base lab
-# Traces: open http://localhost:16686, search by service name
+docker compose exec expense-api curl -s http://localhost:3001/metrics   # raw Prometheus text (not public via gateway)
+docker compose logs -f expense-api             # structured JSON logs
+# Traces: open http://localhost:16686, search by service name (expense-api, ...)
 ```
 
 **Confirm an alert fired:**

@@ -18,6 +18,8 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
+from prometheus_client import Counter
+
 from metrics import init_metrics
 
 app = Flask(__name__)
@@ -26,15 +28,21 @@ app = Flask(__name__)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # Configuration
-SERVICE_NAME = "service-a"
-PORT = int(os.environ.get("SERVICE_A_PORT", "3001"))
+SERVICE_NAME = "expense-api"
+PORT = int(os.environ.get("EXPENSE_API_PORT", "3001"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
-SERVICE_B_URL = os.environ.get("SERVICE_B_URL", "http://service-b.internal:3002").rstrip("/")
+POLICY_SERVICE_URL = os.environ.get("POLICY_SERVICE_URL", "http://policy-service:3002").rstrip("/")
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
 OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
 
 # Prometheus metrics: request counters/latency histogram + /metrics endpoint.
 init_metrics(app, SERVICE_NAME)
+
+# Domain metric: expenses by outcome (approved | rejected | error), by category.
+EXPENSES_TOTAL = Counter(
+    "expenses_total", "Expenses processed, by category and final outcome.",
+    ["category", "status"],
+)
 
 
 def _setup_tracing():
@@ -103,6 +111,17 @@ def _ms():
     return round((time.time() - g.start_time) * 1000, 2) if hasattr(g, "start_time") else None
 
 
+def sample_expense():
+    """A default expense so GET / bodyless calls (e.g. the load test) still work."""
+    return {
+        "expense_id": "EXP-" + uuid.uuid4().hex[:6].upper(),
+        "employee": "demo",
+        "amount": 240.0,
+        "category": "travel",
+        "currency": "USD",
+    }
+
+
 # ── Request lifecycle hooks ───────────────────────────────────────────────────
 
 @app.before_request
@@ -125,10 +144,10 @@ def health():
     overall = "healthy"
 
     try:
-        r = http_client.get(f"{SERVICE_B_URL}/health", timeout=2)
-        deps["service-b"] = "ok" if r.status_code == 200 else "degraded"
+        r = http_client.get(f"{POLICY_SERVICE_URL}/health", timeout=2)
+        deps["policy-service"] = "ok" if r.status_code == 200 else "degraded"
     except http_client.RequestException:
-        deps["service-b"] = "unreachable"
+        deps["policy-service"] = "unreachable"
         overall = "degraded"
 
     log("health_check", rid, request.path, 200,
@@ -137,52 +156,64 @@ def health():
         "service": SERVICE_NAME,
         "status": overall,
         "port": PORT,
-        "message": f"Hello {SERVICE_NAME} listening on {PORT}",
+        "message": f"{SERVICE_NAME} listening on {PORT}",
         "dependencies": deps,
     }), 200
 
 
-# ── 2. Start the full request flow ───────────────────────────────────────────
-@app.route("/greet-service-b", methods=["GET", "POST"])
-def greet_service_b():
+# ── 2. Submit an expense — starts the flow (expense-api → policy → approval) ──
+@app.route("/expenses", methods=["GET", "POST"])
+def submit_expense():
     rid = get_request_id()
-    log("request_received", rid, request.path, 200,
-        method=request.method, client_ip=client_ip())
+    expense = request.get_json(silent=True) or sample_expense()
+    category = expense.get("category", "unknown")
+    log("expense_submitted", rid, request.path, 200, method=request.method,
+        client_ip=client_ip(), expense_id=expense.get("expense_id"),
+        amount=expense.get("amount"), category=category)
 
     try:
         # RequestsInstrumentor propagates traceparent automatically
-        response = http_client.get(
-            f"{SERVICE_B_URL}/greet",
+        response = http_client.post(
+            f"{POLICY_SERVICE_URL}/validate",
+            json=expense,
             headers={"X-Request-ID": rid},
             timeout=DOWNSTREAM_TIMEOUT,
         )
         response.raise_for_status()
-        log("request_forwarded", rid, request.path, response.status_code,
-            method=request.method, target="service-b", duration_ms=_ms())
+        result = response.json()
+        status = result.get("status", "unknown")   # approved | rejected
+        EXPENSES_TOTAL.labels(category=category, status=status).inc()
+        log("expense_decided", rid, request.path, 200, method=request.method,
+            expense_id=expense.get("expense_id"), decision=status, duration_ms=_ms())
         return jsonify({
             "request_id": rid,
-            "status": "success",
-            "message": "Request completed successfully",
+            "expense_id": expense.get("expense_id"),
+            "status": status,
+            "detail": result,
         }), 200
 
     except http_client.RequestException as e:
-        log("request_failed", rid, request.path, 502, level="ERROR",
+        EXPENSES_TOTAL.labels(category=category, status="error").inc()
+        log("expense_failed", rid, request.path, 502, level="ERROR",
             method=request.method, error=str(e), duration_ms=_ms())
         return jsonify({
             "request_id": rid,
+            "expense_id": expense.get("expense_id"),
             "status": "error",
-            "message": "Service B unreachable",
+            "message": "Policy service unreachable",
         }), 502
 
 
-# ── 3. Receive callback from Service C ───────────────────────────────────────
-@app.route("/greeting-rcvd", methods=["POST"])
-def greeting_received():
+# ── 3. Receive the approval callback from approval-service ────────────────────
+@app.route("/expenses/callback", methods=["POST"])
+def expense_callback():
     data = request.get_json(silent=True) or {}
     rid = data.get("request_id", get_request_id())
     log("callback_received", rid, request.path, 200,
         source_service=data.get("source_service"),
-        message=data.get("message"),
+        expense_id=data.get("expense_id"),
+        ledger_ref=data.get("ledger_ref"),
+        expense_status=data.get("status"),
         duration_ms=_ms())
     return jsonify({"status": "received"}), 200
 
@@ -238,7 +269,7 @@ def dependency_fail():
     return jsonify({
         "request_id": rid,
         "status": "error",
-        "message": "Simulated dependency failure — service-b reported error",
+        "message": "Simulated dependency failure — policy-service reported error",
     }), 502
 
 
@@ -273,6 +304,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
-        bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL,
+        bind_host=BIND_HOST, port=PORT, downstream=POLICY_SERVICE_URL,
         otel_endpoint=OTEL_ENDPOINT)
     app.run(host=BIND_HOST, port=PORT, threaded=True)

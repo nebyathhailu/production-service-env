@@ -5,6 +5,9 @@
 # Required environment variables (see .env.example): DOCKERHUB_USERNAME,
 # APP_NAME, IMAGE_TAG. IMAGE_TAG must be a commit-pinned tag (sha-<hash>),
 # never "latest".
+#
+# Service keys are the expense-domain names; the published image names keep the
+# original -service-a/-b/-c suffixes (the CI build matrix publishes by code dir).
 
 services:
   nginx:
@@ -14,23 +17,23 @@ services:
     volumes:
       - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      service-a:
+      expense-api:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - frontend
 
-  service-a:
+  expense-api:
     image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-a:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_A_PORT: "3001"
-      SERVICE_B_URL: "http://service-b:3002"
+      EXPENSE_API_PORT: "3001"
+      POLICY_SERVICE_URL: "http://policy-service:3002"
       DOWNSTREAM_TIMEOUT: "5"
     depends_on:
-      service-b:
+      policy-service:
         condition: service_healthy
-      service-c:
+      approval-service:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -39,24 +42,25 @@ services:
     # No "ports:" - reachable on the Compose network (by Nginx) but not
     # published to the host.
 
-  service-b:
+  policy-service:
     image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-b:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_B_PORT: "3002"
-      SERVICE_C_URL: "http://service-c:3003"
+      POLICY_SERVICE_PORT: "3002"
+      APPROVAL_SERVICE_URL: "http://approval-service:3003"
+      POLICY_MAX_AMOUNT: "500"
       DOWNSTREAM_TIMEOUT: "5"
     restart: unless-stopped
     networks:
       - backend
     # No "ports:" - internal-only.
 
-  service-c:
+  approval-service:
     image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-c:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_C_PORT: "3003"
-      SERVICE_A_URL: "http://service-a:3001"
+      APPROVAL_SERVICE_PORT: "3003"
+      EXPENSE_API_URL: "http://expense-api:3001"
       DOWNSTREAM_TIMEOUT: "5"
     restart: unless-stopped
     networks:
