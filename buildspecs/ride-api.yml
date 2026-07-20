@@ -1,0 +1,40 @@
+version: 0.2
+
+env:
+  variables:
+    SERVICE_NAME: "ride-api"
+    ECR_REPO: "devops-g1-ride-api"
+    CONTAINER_NAME: "ride-api"
+    AWS_REGION: "us-east-1"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+  pre_build:
+    commands:
+      - echo "Running ride-api tests"
+      - pytest services/ride-api/tests -v
+      - echo "Logging in to ECR"
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - ECR_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO
+
+  build:
+    commands:
+      - echo "Building ride-api image for linux/amd64 (Fargate requirement)"
+      - docker buildx create --use
+      - docker buildx build --platform linux/amd64 -t $ECR_URI:$IMAGE_TAG-amd64 -f services/ride-api/Dockerfile --push .
+
+  post_build:
+    commands:
+      - echo "Writing imagedefinitions.json"
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$ECR_URI:$IMAGE_TAG-amd64" > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
