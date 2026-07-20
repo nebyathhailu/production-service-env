@@ -1,0 +1,45 @@
+{
+  "family": "devops-g1-ride-api",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::827478161993:role/devops-g1-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::827478161993:role/devops-g1-ride-api-task-role",
+  "containerDefinitions": [
+    {
+      "name": "ride-api",
+      "image": "827478161993.dkr.ecr.us-east-1.amazonaws.com/devops-g1-ride-api:8a9d256-amd64",
+      "essential": true,
+      "portMappings": [
+        {
+          "name": "ride-api",
+          "containerPort": 3001,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        { "name": "BIND_HOST", "value": "0.0.0.0" },
+        { "name": "RIDE_API_PORT", "value": "3001" },
+        { "name": "MATCHING_SERVICE_URL", "value": "http://matching-service:3002" },
+        { "name": "DOWNSTREAM_TIMEOUT", "value": "5" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/devops-g1-ride-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ride-api"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -fs http://localhost:3001/health || exit 1"],
+        "interval": 5,
+        "timeout": 3,
+        "retries": 5,
+        "startPeriod": 5
+      }
+    }
+  ]
+}
