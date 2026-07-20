@@ -1,12 +1,20 @@
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import requests
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_service_dir = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_service_dir))
 
-import app as ride_api  # noqa: E402
+# Loaded under a service-specific module name (instead of plain "app") so this
+# doesn't collide in sys.modules with matching-service/dispatch-service's own
+# app.py when the full suite runs together.
+_spec = importlib.util.spec_from_file_location("ride_api_app", _service_dir / "app.py")
+ride_api = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = ride_api
+_spec.loader.exec_module(ride_api)
 
 
 def make_client():
