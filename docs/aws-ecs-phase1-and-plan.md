@@ -357,7 +357,7 @@ ECS service* and *wiring Service Connect*, not the earlier Docker/ECR steps.
 
 ## 7. Phase 2 — Host Each Service
 
-**Progress log (Person 1 / ride-api, real resources created so far):**
+**Progress log (ride-api, real resources created so far):**
 - ✅ ECS cluster `devops-g1-cluster` (Fargate, Container Insights on)
 - ✅ Service Connect namespace `group1.internal`
 - ✅ ECR repo `devops-g1-ride-api` (immutable tags) + image pushed, tagged `8a9d256`
@@ -377,8 +377,8 @@ ECS service* and *wiring Service Connect*, not the earlier Docker/ECR steps.
 - [ ] Build your Docker image **explicitly for `linux/amd64`** — Fargate only runs amd64, and a
       plain `docker build` on an Apple Silicon Mac produces an arm64 image by default, which
       **will fail to deploy** with `CannotPullContainerError: image Manifest does not contain
-      descriptor matching platform 'linux/amd64'` (hit and confirmed by Person 1 — this is a real
-      scar-log entry, not a hypothetical). Use:
+      descriptor matching platform 'linux/amd64'` (hit and confirmed while building ride-api —
+      this is a real scar-log entry, not a hypothetical, see Section 12). Use:
       ```bash
       docker buildx build --platform linux/amd64 \
         -t <account>.dkr.ecr.<region>.amazonaws.com/devops-g<n>-<your-service>:<git-sha> \
@@ -691,7 +691,7 @@ shared Route 53 zones, another group's resources.
 of documented failures as a red flag, not a sign of a smooth build. Log every real failure,
 including the small dumb ones.
 
-### Entry 1 — Person 1 / ride-api — image failed to pull on Fargate
+### Entry 1 — ride-api — image failed to pull on Fargate
 
 | Field | Entry |
 |---|---|
@@ -702,7 +702,7 @@ including the small dumb ones.
 | Repair | Rebuilt the image explicitly targeting the correct platform: `docker buildx build --platform linux/amd64 -t <ecr-uri>:<tag>-amd64 -f services/ride-api/Dockerfile --push .` — verified the pushed manifest actually contained `Platform: linux/amd64` via `docker buildx imagetools inspect` before wiring it into a new task definition revision, then force-deployed the ECS service onto that corrected revision. |
 | Prevention | Always build container images destined for Fargate with an explicit `--platform linux/amd64` flag when developing on Apple Silicon hardware — never rely on the platform-less default `docker build`, since it silently succeeds locally (your own Mac can run the arm64 image fine) and only fails once it reaches AWS. Documented this exact command in Section 7 of this plan so Person 2 and Person 3 don't repeat it. |
 
-### Entry 2 — Person 1 / ride-api — ECS Exec required a task role, not just an execution role
+### Entry 2 — ride-api — ECS Exec required a task role, not just an execution role
 
 | Field | Entry |
 |---|---|
@@ -712,6 +712,17 @@ including the small dumb ones.
 | Actual cause | Conflated "does the application need AWS permissions" with "does the task need AWS permissions." ECS Exec itself is a feature the *task* uses (to let AWS's Session Manager attach a shell into the running container), independent of whether the application code inside ever calls an AWS API directly. |
 | Repair | Created a dedicated task role (`devops-g1-ride-api-task-role`) with an inline policy granting exactly the four `ssmmessages:*` actions ECS Exec needs, attached it as `taskRoleArn` in the task definition, registered a new revision, and re-created the service successfully. |
 | Prevention | When a task definition enables `enableExecuteCommand`, always create a minimal task role with the SSM messaging permissions up front, even if the application itself needs no other AWS access — don't assume "no task role" just because the app code doesn't call AWS APIs. |
+
+### Entry 3 — ride-api — `aws ecs execute-command` failed locally with a missing plugin
+
+| Field | Entry |
+|---|---|
+| Symptom | After the task role fix (Entry 2), running `aws ecs execute-command --interactive ...` from a local machine failed immediately with `SessionManagerPlugin is not found.` — no connection was attempted at all. |
+| First hypothesis | Assumed this meant the ECS Exec setup on the AWS side was still wrong (task role, `enableExecuteCommand`, or the SSM permissions from Entry 2 hadn't actually taken effect). |
+| Evidence | The error message itself pointed directly at a local, client-side tool, not an AWS-side permission or configuration problem — `aws` CLI commands that fail due to IAM/permissions return a distinct `AccessDenied`/`InvalidParameterException`-style error, not "plugin not found." This was a missing local prerequisite, unrelated to anything already fixed on AWS. |
+| Actual cause | `aws ecs execute-command` relies on a separate, additional program — the Session Manager plugin — installed alongside the AWS CLI on the engineer's own machine. It was never installed on this machine and had to be added on top of the `awscli` install. |
+| Repair | Installed the plugin (`brew install --cask session-manager-plugin`), confirmed it was on `PATH` (`session-manager-plugin --version`), then re-ran the exact same `execute-command`, which succeeded and returned real output (`ECS_EXEC_WORKS`, `whoami` → `root`) from inside the running container. |
+| Prevention | Install the Session Manager plugin on every team member's machine before anyone attempts ECS Exec, rather than discovering it's missing mid-test — this matches the assignment's own listed prerequisite ("Session Manager support on the engineer machine") under the ECS Exec section, which is easy to skim past on a first read. |
 
 ---
 
