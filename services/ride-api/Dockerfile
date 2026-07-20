@@ -15,7 +15,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY services/ride-api/*.py .
+COPY services/ride-api/*.py ./
 
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser
