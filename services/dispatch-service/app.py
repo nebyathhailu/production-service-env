@@ -26,6 +26,8 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # Configuration
 SERVICE_NAME = "dispatch-service"
+# Bump this on a visible change so the deployed version is provable via /health.
+VERSION = os.environ.get("SERVICE_VERSION", "1.1.0")
 PORT = int(os.environ.get("DISPATCH_SERVICE_PORT", "3003"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
 RIDE_API_URL = os.environ.get("RIDE_API_URL", "http://ride-api.internal:3001").rstrip("/")
@@ -126,6 +128,7 @@ def health():
     return jsonify(
         service=SERVICE_NAME,
         status="healthy",
+        version=VERSION,
         port=PORT,
         message=f"Hello {SERVICE_NAME} listening on {PORT}",
     ), 200
