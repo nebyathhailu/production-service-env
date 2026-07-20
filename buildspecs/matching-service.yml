@@ -1,0 +1,48 @@
+# CodeBuild buildspec for matching-service (Group 1).
+# Driven by CodePipeline: source arrives from GitHub via CodeConnections,
+# this project tests + builds + pushes the image, and emits
+# imagedefinitions.json for the ECS deploy stage.
+#
+# Env vars provided by the CodeBuild project: ACCOUNT_ID, ECR_REPO, CONTAINER_NAME.
+# AWS_DEFAULT_REGION and CODEBUILD_RESOLVED_SOURCE_VERSION are provided by CodeBuild.
+version: 0.2
+
+env:
+  variables:
+    # Enable BuildKit so the image builds regardless of the base builder.
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+  pre_build:
+    commands:
+      # Short Git SHA is the image tag — never "latest".
+      - COMMIT_HASH=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-7)
+      - IMAGE_TAG="$COMMIT_HASH"
+      - REPO_URI="$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO"
+      - echo "Authenticating to ECR $REPO_URI"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+      - echo "Running tests"
+      - (cd services/matching-service && pytest -v)
+
+  build:
+    commands:
+      - echo "Building $REPO_URI:$IMAGE_TAG"
+      - docker build -t "$REPO_URI:$IMAGE_TAG" -f services/matching-service/Dockerfile .
+
+  post_build:
+    commands:
+      - echo "Pushing $REPO_URI:$IMAGE_TAG"
+      - docker push "$REPO_URI:$IMAGE_TAG"
+      # Container name MUST match the ECS task-definition container name exactly.
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$REPO_URI:$IMAGE_TAG" > imagedefinitions.json
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
