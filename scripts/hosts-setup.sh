@@ -13,9 +13,9 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 ENTRIES=(
-    "127.0.0.1   service-a.internal"
-    "127.0.0.1   service-b.internal"
-    "127.0.0.1   service-c.internal"
+    "127.0.0.1   ride-api.internal"
+    "127.0.0.1   matching-service.internal"
+    "127.0.0.1   dispatch-service.internal"
 )
 
 for entry in "${ENTRIES[@]}"; do
@@ -29,6 +29,6 @@ done
 
 echo
 echo "Verifying resolution:"
-for name in service-a.internal service-b.internal service-c.internal; do
+for name in ride-api.internal matching-service.internal dispatch-service.internal; do
     getent hosts "$name"
 done

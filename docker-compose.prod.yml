@@ -14,23 +14,23 @@ services:
     volumes:
       - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      service-a:
+      ride-api:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - frontend
 
-  service-a:
-    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-a:${IMAGE_TAG}
+  ride-api:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-ride-api:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_A_PORT: "3001"
-      SERVICE_B_URL: "http://service-b:3002"
+      RIDE_API_PORT: "3001"
+      MATCHING_SERVICE_URL: "http://matching-service:3002"
       DOWNSTREAM_TIMEOUT: "5"
     depends_on:
-      service-b:
+      matching-service:
         condition: service_healthy
-      service-c:
+      dispatch-service:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -39,24 +39,24 @@ services:
     # No "ports:" - reachable on the Compose network (by Nginx) but not
     # published to the host.
 
-  service-b:
-    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-b:${IMAGE_TAG}
+  matching-service:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-matching-service:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_B_PORT: "3002"
-      SERVICE_C_URL: "http://service-c:3003"
+      MATCHING_SERVICE_PORT: "3002"
+      DISPATCH_SERVICE_URL: "http://dispatch-service:3003"
       DOWNSTREAM_TIMEOUT: "5"
     restart: unless-stopped
     networks:
       - backend
     # No "ports:" - internal-only.
 
-  service-c:
-    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-service-c:${IMAGE_TAG}
+  dispatch-service:
+    image: ${DOCKERHUB_USERNAME}/${APP_NAME}-dispatch-service:${IMAGE_TAG}
     environment:
       BIND_HOST: "0.0.0.0"
-      SERVICE_C_PORT: "3003"
-      SERVICE_A_URL: "http://service-a:3001"
+      DISPATCH_SERVICE_PORT: "3003"
+      RIDE_API_URL: "http://ride-api:3001"
       DOWNSTREAM_TIMEOUT: "5"
     restart: unless-stopped
     networks:

@@ -49,9 +49,10 @@ export const options = {
   },
 };
 
-// Normal traffic: the standard success path through the full A->B->C->A chain.
+// Normal traffic: the standard success path through the full
+// ride-api -> matching-service -> dispatch-service -> ride-api chain.
 export function normalTraffic() {
-  const res = http.get(`${BASE_URL}/service-a/greet-service-b`);
+  const res = http.get(`${BASE_URL}/ride-api/request-ride`);
   check(res, { "normal: status is 200": (r) => r.status === 200 });
   sleep(1);
 }
@@ -59,16 +60,16 @@ export function normalTraffic() {
 // Stress traffic: same path, higher concurrency, no think-time - meant to
 // push latency up and reveal degradation in Grafana/Prometheus.
 export function stressTraffic() {
-  const res = http.get(`${BASE_URL}/service-a/greet-service-b`);
+  const res = http.get(`${BASE_URL}/ride-api/request-ride`);
   check(res, { "stress: got a response": (r) => r.status !== 0 });
 }
 
 // Failure traffic: hits the lab-only controlled-failure endpoint so the
 // error-rate alert has something real to fire on. /fail always returns 500
-// (see services/service-a/app.py) - asserting that exact code, not just
+// (see services/ride-api/app.py) - asserting that exact code, not just
 // "got a response", makes this a real correctness check on the failure path.
 export function failureTraffic() {
-  const res = http.get(`${BASE_URL}/service-a/fail`, {
+  const res = http.get(`${BASE_URL}/ride-api/fail`, {
     tags: { scenario: "failure" },
   });
   check(res, { "failure: returns 500 as expected": (r) => r.status === 500 });

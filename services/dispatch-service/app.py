@@ -1,13 +1,14 @@
-from flask import Flask, request, jsonify, g
-import requests as http_client
+from flask import Flask, jsonify, request, g
 import json
 import logging
 import signal
 import time
-import uuid
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
+
+import requests as http_client
 
 # ── OpenTelemetry setup ───────────────────────────────────────────────────────
 from opentelemetry import trace as otel_trace
@@ -20,18 +21,18 @@ from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
 from metrics import init_metrics
 
-app = Flask(__name__)
-
-# Silence Werkzeug's unstructured access log
+# Silence Werkzeug's unstructured access log; we emit our own structured JSON.
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # Configuration
-SERVICE_NAME = "service-a"
-PORT = int(os.environ.get("SERVICE_A_PORT", "3001"))
+SERVICE_NAME = "dispatch-service"
+PORT = int(os.environ.get("DISPATCH_SERVICE_PORT", "3003"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
-SERVICE_B_URL = os.environ.get("SERVICE_B_URL", "http://service-b.internal:3002").rstrip("/")
+RIDE_API_URL = os.environ.get("RIDE_API_URL", "http://ride-api.internal:3001").rstrip("/")
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
 OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
+
+app = Flask(__name__)
 
 # Prometheus metrics: request counters/latency histogram + /metrics endpoint.
 init_metrics(app, SERVICE_NAME)
@@ -49,7 +50,6 @@ def _setup_tracing():
     provider.add_span_processor(BatchSpanProcessor(exporter))
     otel_trace.set_tracer_provider(provider)
     FlaskInstrumentor().instrument_app(app)
-    # Auto-propagates traceparent on every requests.get/post call
     RequestsInstrumentor().instrument()
 
 
@@ -88,7 +88,7 @@ def log(event, request_id, path, status, level="INFO", **extra):
     sys.stdout.flush()
 
 
-def get_request_id():
+def request_id():
     return getattr(g, "request_id", None) or request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
 
@@ -113,118 +113,92 @@ def _start_timer():
 
 @app.after_request
 def add_request_id_header(resp):
-    resp.headers.setdefault("X-Request-ID", get_request_id())
+    resp.headers.setdefault("X-Request-ID", request_id())
     return resp
 
 
-# ── 1. Health check — dependency-aware ───────────────────────────────────────
-@app.route("/health")
+# ── Health check (no dependency probe — avoids A→B→C→A circular health loop) ─
+@app.get("/health")
 def health():
-    rid = get_request_id()
-    deps = {}
-    overall = "healthy"
-
-    try:
-        r = http_client.get(f"{SERVICE_B_URL}/health", timeout=2)
-        deps["service-b"] = "ok" if r.status_code == 200 else "degraded"
-    except http_client.RequestException:
-        deps["service-b"] = "unreachable"
-        overall = "degraded"
-
+    rid = request_id()
     log("health_check", rid, request.path, 200,
-        method=request.method, client_ip=client_ip(), dependencies=deps, duration_ms=_ms())
-    return jsonify({
-        "service": SERVICE_NAME,
-        "status": overall,
-        "port": PORT,
-        "message": f"Hello {SERVICE_NAME} listening on {PORT}",
-        "dependencies": deps,
-    }), 200
+        method=request.method, client_ip=client_ip(), duration_ms=_ms())
+    return jsonify(
+        service=SERVICE_NAME,
+        status="healthy",
+        port=PORT,
+        message=f"Hello {SERVICE_NAME} listening on {PORT}",
+    ), 200
 
 
-# ── 2. Start the full request flow ───────────────────────────────────────────
-@app.route("/greet-service-b", methods=["GET", "POST"])
-def greet_service_b():
-    rid = get_request_id()
+# ── Receive from matching-service, callback to ride-api ──────────────────────
+@app.get("/assign-driver")
+def assign_driver():
+    rid = request_id()
     log("request_received", rid, request.path, 200,
         method=request.method, client_ip=client_ip())
 
+    callback_url = f"{RIDE_API_URL}/driver-assigned"
+    payload = {
+        "request_id": rid,
+        "source_service": SERVICE_NAME,
+        "message": "Greeting processed",
+        "timestamp": iso_now(),
+    }
     try:
-        # RequestsInstrumentor propagates traceparent automatically
-        response = http_client.get(
-            f"{SERVICE_B_URL}/greet",
+        # RequestsInstrumentor propagates traceparent header automatically
+        resp = http_client.post(
+            callback_url,
+            json=payload,
             headers={"X-Request-ID": rid},
             timeout=DOWNSTREAM_TIMEOUT,
         )
-        response.raise_for_status()
-        log("request_forwarded", rid, request.path, response.status_code,
-            method=request.method, target="service-b", duration_ms=_ms())
-        return jsonify({
-            "request_id": rid,
-            "status": "success",
-            "message": "Request completed successfully",
-        }), 200
+        resp.raise_for_status()
+        log("callback_sent", rid, request.path, 200,
+            method=request.method, target="ride-api",
+            downstream_status=resp.status_code, duration_ms=_ms())
+        return jsonify(request_id=rid, status="processed", callback_sent=True), 200
 
     except http_client.RequestException as e:
         log("request_failed", rid, request.path, 502, level="ERROR",
-            method=request.method, error=str(e), duration_ms=_ms())
-        return jsonify({
-            "request_id": rid,
-            "status": "error",
-            "message": "Service B unreachable",
-        }), 502
+            method=request.method, target="ride-api",
+            error="callback_failed", detail=str(e), duration_ms=_ms())
+        return jsonify(request_id=rid, status="error",
+                       callback_sent=False, error="callback_failed"), 502
 
 
-# ── 3. Receive callback from Service C ───────────────────────────────────────
-@app.route("/greeting-rcvd", methods=["POST"])
-def greeting_received():
-    data = request.get_json(silent=True) or {}
-    rid = data.get("request_id", get_request_id())
-    log("callback_received", rid, request.path, 200,
-        source_service=data.get("source_service"),
-        message=data.get("message"),
-        duration_ms=_ms())
-    return jsonify({"status": "received"}), 200
-
-
-# ── 4. Failure simulation endpoints (lab-only) ────────────────────────────────
+# ── Failure simulation endpoints (lab-only) ───────────────────────────────────
 
 @app.route("/fail")
 def fail():
-    rid = get_request_id()
+    rid = request_id()
     log("fail_triggered", rid, request.path, 500, level="ERROR",
         method=request.method, duration_ms=_ms())
-    return jsonify({
-        "request_id": rid,
-        "status": "error",
-        "message": "Simulated hard failure",
-    }), 500
+    return jsonify(request_id=rid, status="error",
+                   message="Simulated hard failure"), 500
 
 
 @app.route("/slow")
 def slow():
-    rid = get_request_id()
+    rid = request_id()
     try:
         delay = float(request.args.get("delay", 3))
     except ValueError:
-        return jsonify({"request_id": rid, "status": "error",
-                        "message": "delay must be a number"}), 400
+        return jsonify(request_id=rid, status="error",
+                       message="delay must be a number"), 400
     delay = max(0.0, min(delay, 30.0))
     log("slow_triggered", rid, request.path, 200, level="WARN",
         method=request.method, delay_s=delay)
     time.sleep(delay)
     log("slow_completed", rid, request.path, 200,
         method=request.method, delay_s=delay, duration_ms=_ms())
-    return jsonify({
-        "request_id": rid,
-        "status": "ok",
-        "message": f"Slept {delay}s",
-    }), 200
+    return jsonify(request_id=rid, status="ok",
+                   message=f"Slept {delay}s"), 200
 
 
 @app.route("/error")
 def error():
-    rid = get_request_id()
+    rid = request_id()
     log("error_triggered", rid, request.path, 500, level="ERROR",
         method=request.method)
     raise RuntimeError("Simulated internal error for observability demo")
@@ -232,33 +206,31 @@ def error():
 
 @app.route("/dependency-fail")
 def dependency_fail():
-    rid = get_request_id()
+    rid = request_id()
     log("dependency_fail_triggered", rid, request.path, 502, level="ERROR",
         method=request.method, duration_ms=_ms())
-    return jsonify({
-        "request_id": rid,
-        "status": "error",
-        "message": "Simulated dependency failure — service-b reported error",
-    }), 502
+    return jsonify(request_id=rid, status="error",
+                   message="Simulated dependency failure — ride-api reported error"), 502
 
 
-# ── 5. Error handlers ─────────────────────────────────────────────────────────
+# ── Error handlers ────────────────────────────────────────────────────────────
 
 @app.errorhandler(404)
-def not_found(e):
-    rid = get_request_id()
+def not_found(_e):
+    rid = request_id()
     log("route_not_found", rid, request.path, 404, level="WARN",
         method=request.method, client_ip=client_ip())
-    return jsonify({"error": "route not found", "path": request.path}), 404
+    return jsonify(request_id=rid, status="error", error="route_not_found",
+                   path=request.path), 404
 
 
 @app.errorhandler(500)
 def internal_error(e):
-    rid = get_request_id()
+    rid = request_id()
     log("internal_error", rid, request.path, 500, level="ERROR",
         method=request.method, error=str(e))
-    return jsonify({"request_id": rid, "status": "error",
-                    "message": "Internal server error"}), 500
+    return jsonify(request_id=rid, status="error",
+                   message="Internal server error"), 500
 
 
 # ── Shutdown lifecycle ────────────────────────────────────────────────────────
@@ -273,6 +245,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
-        bind_host=BIND_HOST, port=PORT, downstream=SERVICE_B_URL,
+        bind_host=BIND_HOST, port=PORT, callback=RIDE_API_URL,
         otel_endpoint=OTEL_ENDPOINT)
     app.run(host=BIND_HOST, port=PORT, threaded=True)

@@ -47,9 +47,9 @@ echo "==> [6/8] Firewall (ufw: only 22 + 80 inbound)"
 "$REPO_ROOT/scripts/firewall-setup.sh"
 
 echo "==> [7/8] Installing + enabling systemd units"
-cp systemd/service-*.service /etc/systemd/system/
+cp systemd/ride-api.service systemd/matching-service.service systemd/dispatch-service.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now service-b service-c service-a
+systemctl enable --now matching-service dispatch-service ride-api
 
 echo "==> [8/8] Deploying Nginx"
 rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf

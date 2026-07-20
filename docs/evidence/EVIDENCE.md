@@ -18,7 +18,7 @@ catches Multipass NAT/port-forward leaks, bridge surprises, or cloud SG gaps).
 | Firewall state | inside VM | `sudo ufw status verbose` | only 22 + 80 inbound; 3002/3003 denied |
 | External exposure | **host** | `curl --connect-timeout 3 http://<VM_IP>:3002/health` | B/C fail externally; `:80` works |
 | Host forwarding | **host** | `curl --connect-timeout 3 http://127.0.0.1:3002/health` | fails unless VM runtime forwards it |
-| Happy-path trace | via Nginx | curl `/service-a/greet-service-b`, then grep the `request_id` | same ID in Nginx + A + B + C |
+| Happy-path trace | via Nginx | curl `/ride-api/request-ride`, then grep the `request_id` | same ID in Nginx + ride-api + matching-service + dispatch-service |
 | Failure behavior | inside | stop B, hit public endpoint, inspect logs | A stays up, returns 502, `request_failed` logged |
 | Lifecycle | inside VM | `pkill`/reboot, then `systemctl status` | systemd restarts; survives reboot |
 
@@ -39,7 +39,7 @@ Replace `<VM_IP>` with the address from `multipass info <vm-name>` (or `hostname
 
 ```console
 # Public entry point works:
-$ curl --connect-timeout 3 -s -o /dev/null -w '%{http_code}\n' http://<VM_IP>/service-a/health
+$ curl --connect-timeout 3 -s -o /dev/null -w '%{http_code}\n' http://<VM_IP>/ride-api/health
 <paste: expect 200>
 
 # Internal services are NOT reachable from off-box:
@@ -58,12 +58,12 @@ $ curl --connect-timeout 3 http://127.0.0.1:3002/health
 
 ```console
 # Crash recovery — kill the process, systemd respawns it:
-$ sudo systemctl kill -s SIGKILL service-b ; sleep 3 ; systemctl is-active service-b
+$ sudo systemctl kill -s SIGKILL matching-service ; sleep 3 ; systemctl is-active matching-service
 <paste: expect "active">
 
 # Reboot recovery — after `sudo reboot` and reconnecting:
-$ systemctl is-enabled service-a service-b service-c
+$ systemctl is-enabled ride-api matching-service dispatch-service
 <paste: expect enabled x3>
-$ systemctl is-active service-a service-b service-c
+$ systemctl is-active ride-api matching-service dispatch-service
 <paste: expect active x3>
 ```

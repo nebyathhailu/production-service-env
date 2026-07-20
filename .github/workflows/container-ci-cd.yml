@@ -18,12 +18,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - service: service-a
-            path: ./services/service-a
-          - service: service-b
-            path: ./services/service-b
-          - service: service-c
-            path: ./services/service-c
+          - service: ride-api
+            path: ./services/ride-api
+          - service: matching-service
+            path: ./services/matching-service
+          - service: dispatch-service
+            path: ./services/dispatch-service
 
     steps:
       - name: Checkout repository
@@ -74,7 +74,7 @@ jobs:
         # --retry-connrefused covers the brief window where nginx is "running"
         # (so --wait returns) but its worker hasn't bound :80 yet. nginx has no
         # healthcheck for --wait to gate on, so retry here instead of a fixed sleep.
-        run: curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://localhost:8080/service-a/health
+        run: curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://localhost:8080/ride-api/health
 
       - name: Check observability stack is reachable
         run: |
@@ -95,12 +95,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - service: service-a
-            path: ./services/service-a
-          - service: service-b
-            path: ./services/service-b
-          - service: service-c
-            path: ./services/service-c
+          - service: ride-api
+            path: ./services/ride-api
+          - service: matching-service
+            path: ./services/matching-service
+          - service: dispatch-service
+            path: ./services/dispatch-service
 
     steps:
       - name: Checkout repository

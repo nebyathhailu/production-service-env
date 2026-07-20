@@ -1,0 +1,73 @@
+# ride-api - public-facing entry point behind Nginx (port 3001).
+# Binds to 127.0.0.1; only Nginx (port 80) is public.
+#
+# DEPENDENCY MANAGEMENT (assignment requirement):
+#   ride-api must not start before matching-service and dispatch-service, and
+#   must not become operational until both are actually reachable.
+#     - After=        -> ordering: ride-api starts after matching-service and
+#                        dispatch-service units have started.
+#     - Wants=        -> pulls them in as a startup preference (paired with
+#                        After= above). Deliberately not Requires=: Requires=
+#                        propagates *deactivation* too, so if either is later
+#                        stopped/crashes, ride-api would be torn down with it -
+#                        taking the public entry point down along with one
+#                        internal dependency. Wants= keeps the startup
+#                        ordering without that runtime coupling, so ride-api
+#                        stays up and its own error handling deals with a
+#                        downstream outage.
+#     - ExecStartPre= -> readiness gate: ride-api blocks until
+#                        matching-service and dispatch-service answer their
+#                        /health endpoints (ordering alone only guarantees the
+#                        processes were launched, not that they are listening).
+#
+# Install:  sudo cp systemd/ride-api.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now ride-api
+[Unit]
+Description=ride-api (public entry point, port 3001)
+Documentation=https://github.com/nebyathhailu/production-service-env
+After=network-online.target matching-service.service dispatch-service.service
+Wants=network-online.target
+Wants=matching-service.service dispatch-service.service
+# Allow several quick retries (e.g. while deps are still coming up) before
+# systemd gives up, instead of tripping the default start-limit throttle.
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=serviceenv
+Group=serviceenv
+WorkingDirectory=/opt/service-env/services/ride-api
+
+# Readiness gate: wait (up to ~30s) for matching-service and dispatch-service
+# to actually serve /health before launching ride-api. If they never come up,
+# ride-api fails and is retried.
+ExecStartPre=/usr/bin/env bash -c 'for i in $(seq 1 30); do \
+    curl -sf http://matching-service.internal:3002/health >/dev/null \
+    && curl -sf http://dispatch-service.internal:3003/health >/dev/null \
+    && exit 0; \
+    sleep 1; \
+  done; echo "dependencies (matching-service/dispatch-service) not ready" >&2; exit 1'
+ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/ride-api/app.py
+
+# Configuration (matches in-code defaults; overridable here).
+Environment=RIDE_API_PORT=3001
+Environment=BIND_HOST=127.0.0.1
+Environment=MATCHING_SERVICE_URL=http://matching-service.internal:3002
+Environment=DOWNSTREAM_TIMEOUT=5
+
+Restart=on-failure
+RestartSec=2
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ride-api
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

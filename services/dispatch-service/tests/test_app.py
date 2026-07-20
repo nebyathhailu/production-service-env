@@ -6,12 +6,12 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app as service_c  # noqa: E402
+import app as dispatch_service  # noqa: E402
 
 
 def make_client():
-    service_c.app.testing = True
-    return service_c.app.test_client()
+    dispatch_service.app.testing = True
+    return dispatch_service.app.test_client()
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ def test_health_returns_200_and_service_metadata():
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["service"] == "service-c"
+    assert body["service"] == "dispatch-service"
     assert body["status"] == "healthy"
 
 
@@ -37,24 +37,24 @@ def test_unknown_route_returns_structured_404():
 
 # ── Core flow ─────────────────────────────────────────────────────────────────
 
-def test_greet_c_sends_callback_to_service_a():
+def test_assign_driver_sends_callback_to_ride_api():
     client = make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status.return_value = None
-    with patch.object(service_c.http_client, "post", return_value=mock_resp):
-        resp = client.get("/greet-c")
+    with patch.object(dispatch_service.http_client, "post", return_value=mock_resp):
+        resp = client.get("/assign-driver")
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "processed"
     assert body["callback_sent"] is True
 
 
-def test_greet_c_callback_failure_returns_502():
+def test_assign_driver_callback_failure_returns_502():
     client = make_client()
-    with patch.object(service_c.http_client, "post",
+    with patch.object(dispatch_service.http_client, "post",
                       side_effect=requests.exceptions.ConnectionError):
-        resp = client.get("/greet-c")
+        resp = client.get("/assign-driver")
     assert resp.status_code == 502
     body = resp.get_json()
     assert body["callback_sent"] is False
@@ -81,7 +81,7 @@ def test_fail_returns_500_json():
 
 def test_slow_returns_200_with_default_delay():
     client = make_client()
-    with patch.object(service_c.time, "sleep") as mock_sleep:
+    with patch.object(dispatch_service.time, "sleep") as mock_sleep:
         resp = client.get("/slow")
     assert resp.status_code == 200
     body = resp.get_json()
@@ -99,17 +99,17 @@ def test_slow_rejects_non_numeric_delay():
 
 def test_slow_caps_delay_at_30_seconds():
     client = make_client()
-    with patch.object(service_c.time, "sleep") as mock_sleep:
+    with patch.object(dispatch_service.time, "sleep") as mock_sleep:
         resp = client.get("/slow?delay=9999")
     assert resp.status_code == 200
     mock_sleep.assert_called_once_with(30.0)
 
 
 def test_error_endpoint_triggers_500_handler():
-    service_c.app.testing = False
-    client = service_c.app.test_client()
+    dispatch_service.app.testing = False
+    client = dispatch_service.app.test_client()
     resp = client.get("/error")
-    service_c.app.testing = True
+    dispatch_service.app.testing = True
     assert resp.status_code == 500
     body = resp.get_json()
     assert body["status"] == "error"
@@ -129,12 +129,12 @@ def test_dependency_fail_returns_502_json():
 # ── 500 handler ───────────────────────────────────────────────────────────────
 
 def test_unhandled_exception_returns_500_json():
-    service_c.app.testing = False
-    client = service_c.app.test_client()
-    with patch.object(service_c.http_client, "post",
+    dispatch_service.app.testing = False
+    client = dispatch_service.app.test_client()
+    with patch.object(dispatch_service.http_client, "post",
                       side_effect=RuntimeError("unexpected")):
-        resp = client.get("/greet-c")
-    service_c.app.testing = True
+        resp = client.get("/assign-driver")
+    dispatch_service.app.testing = True
     assert resp.status_code == 500
     body = resp.get_json()
     assert body["status"] == "error"

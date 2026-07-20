@@ -8,7 +8,8 @@ datasources:
     type: prometheus
     access: proxy
     # "prometheus" is the Compose service name - resolved via Docker's
-    # internal DNS, same pattern as service-a/b/c calling each other.
+    # internal DNS, same pattern as ride-api/matching-service/dispatch-service
+    # calling each other.
     url: http://prometheus:9090
     isDefault: true
     editable: true

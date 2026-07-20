@@ -1,7 +1,7 @@
 # Operator entry points for the production-service-env stack.
 # Most targets wrap systemd / the scripts in ./scripts. Run `make help`.
 
-SERVICES := service-a service-b service-c
+SERVICES := ride-api matching-service dispatch-service
 
 .PHONY: help install start stop restart status verify evidence logs ports
 
@@ -12,14 +12,14 @@ help:  ## Show this help
 install:  ## Full first-time deploy (sudo): code, venv, units, nginx, firewall
 	sudo ./scripts/install.sh
 
-start:  ## Start all services (dependency order: B, C, then A)
-	sudo systemctl start service-b service-c service-a
+start:  ## Start all services (dependency order: matching-service, dispatch-service, then ride-api)
+	sudo systemctl start matching-service dispatch-service ride-api
 
 stop:  ## Stop all services
-	sudo systemctl stop service-a service-b service-c
+	sudo systemctl stop ride-api matching-service dispatch-service
 
 restart:  ## Restart all services
-	sudo systemctl restart service-b service-c service-a
+	sudo systemctl restart matching-service dispatch-service ride-api
 
 status:  ## Show unit status for all three services
 	systemctl status $(SERVICES) --no-pager
@@ -34,4 +34,4 @@ evidence:  ## Capture an inside-VM proof transcript into docs/evidence/
 	./scripts/collect-evidence.sh
 
 logs:  ## Follow structured JSON logs for all three services
-	journalctl -u service-a -u service-b -u service-c -f -o cat
+	journalctl -u ride-api -u matching-service -u dispatch-service -f -o cat
