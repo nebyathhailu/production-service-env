@@ -1,11 +1,11 @@
-# Service B - internal greeting forwarder (port 3002).
+# matching-service - internal driver matching forwarder (port 3002).
 # Internal-only: binds to 127.0.0.1 so it is unreachable from off-box.
 #
-# Install:  sudo cp systemd/service-b.service /etc/systemd/system/
+# Install:  sudo cp systemd/matching-service.service /etc/systemd/system/
 #           sudo systemctl daemon-reload
-#           sudo systemctl enable --now service-b
+#           sudo systemctl enable --now matching-service
 [Unit]
-Description=Service B (internal greeting forwarder, port 3002)
+Description=matching-service (internal driver matching forwarder, port 3002)
 Documentation=https://github.com/nebyathhailu/production-service-env
 # Don't start until the network (and thus loopback/name resolution) is up.
 After=network-online.target
@@ -15,14 +15,14 @@ Wants=network-online.target
 Type=simple
 User=serviceenv
 Group=serviceenv
-WorkingDirectory=/opt/service-env/services/service-b
-ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/service-b/app.py
+WorkingDirectory=/opt/service-env/services/matching-service
+ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/matching-service/app.py
 
 # Configuration. These match the in-code defaults; set here so an operator can
 # retune ports/discovery centrally without editing source.
-Environment=SERVICE_B_PORT=3002
+Environment=MATCHING_SERVICE_PORT=3002
 Environment=BIND_HOST=127.0.0.1
-Environment=SERVICE_C_URL=http://service-c.internal:3003
+Environment=DISPATCH_SERVICE_URL=http://dispatch-service.internal:3003
 Environment=DOWNSTREAM_TIMEOUT=5
 
 # Restart automatically after a crash/kill (but not after a manual `stop`).
@@ -32,7 +32,7 @@ RestartSec=2
 # Structured JSON on stdout goes straight to journald under this identifier.
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=service-b
+SyslogIdentifier=matching-service
 
 # Hardening (defense in depth; also the "additional security controls" bonus).
 NoNewPrivileges=true

@@ -6,7 +6,7 @@ services:
     volumes:
       - ./nginx/docker-compose.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      service-a:
+      ride-api:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -28,68 +28,68 @@ services:
     networks:
       - appnet
 
-  service-a:
+  ride-api:
     build:
       context: .
-      dockerfile: services/service-a/Dockerfile
+      dockerfile: services/ride-api/Dockerfile
     environment:
-      SERVICE_A_PORT: "3001"
+      RIDE_API_PORT: "3001"
       BIND_HOST: "0.0.0.0"
-      SERVICE_B_URL: "http://service-b:3002"
+      MATCHING_SERVICE_URL: "http://matching-service:3002"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-a"
+      OTEL_SERVICE_NAME: "ride-api"
     depends_on:
       jaeger:
         condition: service_healthy
-      service-b:
+      matching-service:
         condition: service_healthy
-      service-c:
+      dispatch-service:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - Service A is reachable on the Compose network (by Nginx)
+    # No "ports:" - ride-api is reachable on the Compose network (by Nginx)
     # but not published to the host. The public route is entirely via Nginx.
 
-  service-b:
+  matching-service:
     build:
       context: .
-      dockerfile: services/service-b/Dockerfile
+      dockerfile: services/matching-service/Dockerfile
     environment:
-      SERVICE_B_PORT: "3002"
+      MATCHING_SERVICE_PORT: "3002"
       BIND_HOST: "0.0.0.0"
-      SERVICE_C_URL: "http://service-c:3003"
+      DISPATCH_SERVICE_URL: "http://dispatch-service:3003"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-b"
+      OTEL_SERVICE_NAME: "matching-service"
     depends_on:
       jaeger:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - internal-only. Reachable as "service-b:3002" from other
-    # containers on appnet, never reachable from the host or outside it.
+    # No "ports:" - internal-only. Reachable as "matching-service:3002" from
+    # other containers on appnet, never reachable from the host or outside it.
 
-  service-c:
+  dispatch-service:
     build:
       context: .
-      dockerfile: services/service-c/Dockerfile
+      dockerfile: services/dispatch-service/Dockerfile
     environment:
-      SERVICE_C_PORT: "3003"
+      DISPATCH_SERVICE_PORT: "3003"
       BIND_HOST: "0.0.0.0"
-      SERVICE_A_URL: "http://service-a:3001"
+      RIDE_API_URL: "http://ride-api:3001"
       DOWNSTREAM_TIMEOUT: "5"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
-      OTEL_SERVICE_NAME: "service-c"
+      OTEL_SERVICE_NAME: "dispatch-service"
     depends_on:
       jaeger:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
-    # No "ports:" - internal-only, same reasoning as service-b.
+    # No "ports:" - internal-only, same reasoning as matching-service.
 
   prometheus:
     image: prom/prometheus:v2.54.1

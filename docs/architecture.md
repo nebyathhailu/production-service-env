@@ -13,25 +13,25 @@ Client / Load Test Tool (k6)
     Nginx (:8080, only published host port)
         |
         v
-    Service A (:3001) ---> Service B (:3002) ---> Service C (:3003)
-        ^                                              |
-        +----------------------------------------------+
-                        (callback to Service A)
+    ride-api (:3001) ---> matching-service (:3002) ---> dispatch-service (:3003)
+        ^                                                       |
+        +-------------------------------------------------------+
+                        (callback to ride-api)
 ```
 
 ## Request flow
 
 1. Client (or `scripts/load-test.js`) hits Nginx on `:8080`.
-2. Nginx proxies to Service A only — B and C are never directly reachable from outside the
-   Compose network (no `ports:` published for them).
-3. Service A calls Service B, which calls Service C, which calls back to Service A —
-   identical to the base lab's A -> B -> C -> A chain.
+2. Nginx proxies to ride-api only — matching-service and dispatch-service are never directly
+   reachable from outside the Compose network (no `ports:` published for them).
+3. ride-api calls matching-service, which calls dispatch-service, which calls back to ride-api —
+   identical to the base lab's ride-api -> matching-service -> dispatch-service -> ride-api chain.
 4. Every hop carries `X-Request-ID` end to end for correlation.
 
 ## Telemetry flow
 
 ```
- Service A/B/C
+ ride-api/matching-service/dispatch-service
    |      |      |
    | metrics      |
    +------+-------+---> Prometheus (:9090, scrapes /metrics on each service every 5s)
@@ -48,8 +48,9 @@ Client / Load Test Tool (k6)
   labeled by `service`/`method`/`route`/`status_code`). Prometheus (`prometheus.yml`) scrapes all
   three by Compose service name on a 5s interval and evaluates `alert-rules.yml` against them.
 - **Tracing flow**: each service emits an OpenTelemetry span per incoming request, and propagates
-  trace context on every outbound call (A->B, B->C, C->A callback), so one client request produces
-  one connected trace visible in Jaeger as `gateway -> service-a -> service-b -> service-c`.
+  trace context on every outbound call (ride-api->matching-service, matching-service->dispatch-service,
+  dispatch-service->ride-api callback), so one client request produces one connected trace visible
+  in Jaeger as `gateway -> ride-api -> matching-service -> dispatch-service`.
 - **Logging flow**: unchanged from the base lab's structured JSON logging (`request_id`,
   `service`, `event`, `status`), extended with `trace_id`, `level`, and `duration_ms` so a log line
   can be cross-referenced with its Jaeger trace and Prometheus histogram bucket.

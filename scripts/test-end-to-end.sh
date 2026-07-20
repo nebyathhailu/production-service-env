@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Quick end-to-end sanity check for the whole stack: Nginx -> Service A ->
-# Service B -> Service C -> Service A callback, plus the network-security
-# boundary (B not reachable through Nginx). Run after deploying, after a
-# reboot, or any time you want a fast "is everything actually working" check.
+# Quick end-to-end sanity check for the whole stack: Nginx -> ride-api ->
+# matching-service -> dispatch-service -> ride-api callback, plus the
+# network-security boundary (matching-service not reachable through Nginx).
+# Run after deploying, after a reboot, or any time you want a fast
+# "is everything actually working" check.
 #
 # Usage:
 #   ./scripts/test-end-to-end.sh
@@ -24,23 +25,23 @@ check() {
     fi
 }
 
-# 1. Service A health, through Nginx.
-curl -s http://localhost/service-a/health | grep -q '"status":"healthy"'
-check "Service A health check (through Nginx)" "$?"
+# 1. ride-api health, through Nginx.
+curl -s http://localhost/ride-api/health | grep -q '"status":"healthy"'
+check "ride-api health check (through Nginx)" "$?"
 
-# 2. Full request flow: Nginx -> A -> B -> C -> A callback.
-curl -s http://localhost/service-a/greet-service-b | grep -q '"status":"success"'
-check "Full request flow (A -> B -> C -> A callback)" "$?"
+# 2. Full request flow: Nginx -> ride-api -> matching-service -> dispatch-service -> ride-api callback.
+curl -s http://localhost/ride-api/request-ride | grep -q '"status":"success"'
+check "Full request flow (ride-api -> matching-service -> dispatch-service -> callback)" "$?"
 
-# 3. Service B must NOT be reachable through Nginx.
-code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/service-b)
+# 3. matching-service must NOT be reachable through Nginx.
+code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/matching-service)
 [[ "$code" == "404" ]]
-check "Service B not routable through Nginx (got HTTP $code, want 404)" "$?"
+check "matching-service not routable through Nginx (got HTTP $code, want 404)" "$?"
 
-# 4. Service C must NOT be reachable through Nginx.
-code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/service-c)
+# 4. dispatch-service must NOT be reachable through Nginx.
+code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/dispatch-service)
 [[ "$code" == "404" ]]
-check "Service C not routable through Nginx (got HTTP $code, want 404)" "$?"
+check "dispatch-service not routable through Nginx (got HTTP $code, want 404)" "$?"
 
 # 5. Invalid route returns a structured 404, not Nginx's default error page.
 curl -s http://localhost/whatever | grep -q '"error"'

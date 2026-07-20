@@ -3,6 +3,12 @@
 Branch: `feature/docker-compose`
 Commit used for this validation run: `3902184d380bea8db5899ff3358fa3eab8c280f1`
 
+> **Note:** this transcript predates the `service-a`/`service-b`/`service-c` → `ride-api`/
+> `matching-service`/`dispatch-service` rename. Service identifiers below (`service-a`, `/greet-service-b`,
+> etc.) reflect the naming at the time this run was captured, not the current naming — see
+> `services/*/app.py`, `docker-compose.yml`, and the README for the current names. Kept as-is because
+> this file documents a real captured run, not a template to update in place.
+
 All commands below were run for real against the actual `docker-compose.yml` in this repo, not reconstructed from memory. Output is copied verbatim (timestamps will differ on re-run).
 
 ## 1. Start the system

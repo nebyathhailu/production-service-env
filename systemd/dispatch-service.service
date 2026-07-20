@@ -1,11 +1,11 @@
-# Service C - internal processor + callback to Service A (port 3003).
+# dispatch-service - internal processor + callback to ride-api (port 3003).
 # Internal-only: binds to 127.0.0.1 so it is unreachable from off-box.
 #
-# Install:  sudo cp systemd/service-c.service /etc/systemd/system/
+# Install:  sudo cp systemd/dispatch-service.service /etc/systemd/system/
 #           sudo systemctl daemon-reload
-#           sudo systemctl enable --now service-c
+#           sudo systemctl enable --now dispatch-service
 [Unit]
-Description=Service C (internal processor + callback, port 3003)
+Description=dispatch-service (internal processor + callback, port 3003)
 Documentation=https://github.com/nebyathhailu/production-service-env
 After=network-online.target
 Wants=network-online.target
@@ -14,13 +14,13 @@ Wants=network-online.target
 Type=simple
 User=serviceenv
 Group=serviceenv
-WorkingDirectory=/opt/service-env/services/service-c
-ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/service-c/app.py
+WorkingDirectory=/opt/service-env/services/dispatch-service
+ExecStart=/opt/service-env/venv/bin/python /opt/service-env/services/dispatch-service/app.py
 
 # Configuration (matches in-code defaults; overridable here).
-Environment=SERVICE_C_PORT=3003
+Environment=DISPATCH_SERVICE_PORT=3003
 Environment=BIND_HOST=127.0.0.1
-Environment=SERVICE_A_URL=http://service-a.internal:3001
+Environment=RIDE_API_URL=http://ride-api.internal:3001
 Environment=DOWNSTREAM_TIMEOUT=5
 
 Restart=on-failure
@@ -28,7 +28,7 @@ RestartSec=2
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=service-c
+SyslogIdentifier=dispatch-service
 
 NoNewPrivileges=true
 ProtectSystem=full

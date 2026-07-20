@@ -25,10 +25,10 @@ from metrics import init_metrics
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # Configuration
-SERVICE_NAME = "service-c"
-PORT = int(os.environ.get("SERVICE_C_PORT", "3003"))
+SERVICE_NAME = "matching-service"
+PORT = int(os.environ.get("MATCHING_SERVICE_PORT", "3002"))
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
-SERVICE_A_URL = os.environ.get("SERVICE_A_URL", "http://service-a.internal:3001").rstrip("/")
+DISPATCH_SERVICE_URL = os.environ.get("DISPATCH_SERVICE_URL", "http://dispatch-service.internal:3003").rstrip("/")
 DOWNSTREAM_TIMEOUT = float(os.environ.get("DOWNSTREAM_TIMEOUT", "5"))
 OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
 
@@ -117,54 +117,62 @@ def add_request_id_header(resp):
     return resp
 
 
-# ── Health check (no dependency probe — avoids A→B→C→A circular health loop) ─
+# ── Health check — dependency-aware ──────────────────────────────────────────
 @app.get("/health")
 def health():
     rid = request_id()
+    deps = {}
+    overall = "healthy"
+
+    try:
+        r = http_client.get(f"{DISPATCH_SERVICE_URL}/health", timeout=2)
+        deps["dispatch-service"] = "ok" if r.status_code == 200 else "degraded"
+    except http_client.RequestException:
+        deps["dispatch-service"] = "unreachable"
+        overall = "degraded"
+
     log("health_check", rid, request.path, 200,
-        method=request.method, client_ip=client_ip(), duration_ms=_ms())
+        method=request.method, client_ip=client_ip(), dependencies=deps, duration_ms=_ms())
     return jsonify(
         service=SERVICE_NAME,
-        status="healthy",
+        status=overall,
         port=PORT,
         message=f"Hello {SERVICE_NAME} listening on {PORT}",
+        dependencies=deps,
     ), 200
 
 
-# ── Receive from B, callback to A ────────────────────────────────────────────
-@app.get("/greet-c")
-def greet_c():
+# ── Receive from ride-api, forward to dispatch-service ───────────────────────
+@app.get("/find-driver")
+def find_driver():
     rid = request_id()
     log("request_received", rid, request.path, 200,
         method=request.method, client_ip=client_ip())
 
-    callback_url = f"{SERVICE_A_URL}/greeting-rcvd"
-    payload = {
-        "request_id": rid,
-        "source_service": SERVICE_NAME,
-        "message": "Greeting processed",
-        "timestamp": iso_now(),
-    }
     try:
         # RequestsInstrumentor propagates traceparent header automatically
-        resp = http_client.post(
-            callback_url,
-            json=payload,
+        resp = http_client.get(
+            f"{DISPATCH_SERVICE_URL}/assign-driver",
             headers={"X-Request-ID": rid},
             timeout=DOWNSTREAM_TIMEOUT,
         )
         resp.raise_for_status()
-        log("callback_sent", rid, request.path, 200,
-            method=request.method, target="service-a",
+        log("request_forwarded", rid, request.path, 200,
+            method=request.method, target="dispatch-service",
             downstream_status=resp.status_code, duration_ms=_ms())
-        return jsonify(request_id=rid, status="processed", callback_sent=True), 200
+        return jsonify(request_id=rid, status="forwarded", target="dispatch-service"), 200
+
+    except http_client.HTTPError as e:
+        log("request_failed", rid, request.path, 502, level="ERROR",
+            method=request.method, target="dispatch-service",
+            error=f"downstream_http_{e.response.status_code}", duration_ms=_ms())
+        return jsonify(request_id=rid, status="error", error="downstream_error"), 502
 
     except http_client.RequestException as e:
         log("request_failed", rid, request.path, 502, level="ERROR",
-            method=request.method, target="service-a",
-            error="callback_failed", detail=str(e), duration_ms=_ms())
-        return jsonify(request_id=rid, status="error",
-                       callback_sent=False, error="callback_failed"), 502
+            method=request.method, target="dispatch-service",
+            error="downstream_unreachable", detail=str(e), duration_ms=_ms())
+        return jsonify(request_id=rid, status="error", error="downstream_unreachable"), 502
 
 
 # ── Failure simulation endpoints (lab-only) ───────────────────────────────────
@@ -210,7 +218,7 @@ def dependency_fail():
     log("dependency_fail_triggered", rid, request.path, 502, level="ERROR",
         method=request.method, duration_ms=_ms())
     return jsonify(request_id=rid, status="error",
-                   message="Simulated dependency failure — service-a reported error"), 502
+                   message="Simulated dependency failure — dispatch-service reported error"), 502
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────
@@ -245,6 +253,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
     log("service_started", "-", "-", 200,
-        bind_host=BIND_HOST, port=PORT, callback=SERVICE_A_URL,
+        bind_host=BIND_HOST, port=PORT, downstream=DISPATCH_SERVICE_URL,
         otel_endpoint=OTEL_ENDPOINT)
     app.run(host=BIND_HOST, port=PORT, threaded=True)
