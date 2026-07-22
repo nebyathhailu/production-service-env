@@ -1,0 +1,70 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PipelineArtifacts",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject",
+        "s3:GetBucketAcl",
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::codepipeline-us-east-1-*",
+        "arn:aws:s3:::codepipeline-us-east-1-*/*"
+      ]
+    },
+    {
+      "Sid": "UseConnection",
+      "Effect": "Allow",
+      "Action": [
+        "codestar-connections:UseConnection",
+        "codeconnections:UseConnection"
+      ],
+      "Resource": [
+        "arn:aws:codeconnections:us-east-1:827478161993:connection/5fe9c0fb-8146-4afc-9d74-018bd3a86313",
+        "arn:aws:codestar-connections:us-east-1:827478161993:connection/5fe9c0fb-8146-4afc-9d74-018bd3a86313"
+      ]
+    },
+    {
+      "Sid": "StartCodeBuild",
+      "Effect": "Allow",
+      "Action": [
+        "codebuild:StartBuild",
+        "codebuild:BatchGetBuilds",
+        "codebuild:StopBuild"
+      ],
+      "Resource": "arn:aws:codebuild:us-east-1:827478161993:project/devops-g1-dispatch-service-build"
+    },
+    {
+      "Sid": "EcsDeploy",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:DescribeTasks",
+        "ecs:ListTasks",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:UpdateService",
+        "ecs:TagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassEcsRolesOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::827478161993:role/devops-g1-ecs-execution-role",
+        "arn:aws:iam::827478161993:role/devops-g1-ecs-task-role"
+      ],
+      "Condition": {
+        "StringLike": { "iam:PassedToService": "ecs-tasks.amazonaws.com" }
+      }
+    }
+  ]
+}

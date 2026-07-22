@@ -1,0 +1,29 @@
+{
+  "name": "devops-g1-dispatch-service-build",
+  "description": "Build+test+push dispatch-service image for Group 1 pipeline",
+  "source": {
+    "type": "CODEPIPELINE",
+    "buildspec": "buildspecs/dispatch-service.yml"
+  },
+  "artifacts": {
+    "type": "CODEPIPELINE"
+  },
+  "environment": {
+    "type": "LINUX_CONTAINER",
+    "image": "aws/codebuild/standard:7.0",
+    "computeType": "BUILD_GENERAL1_SMALL",
+    "privilegedMode": true,
+    "environmentVariables": [
+      { "name": "ACCOUNT_ID", "value": "827478161993" },
+      { "name": "ECR_REPO", "value": "devops-g1-dispatch-service" },
+      { "name": "CONTAINER_NAME", "value": "dispatch-service" }
+    ]
+  },
+  "serviceRole": "arn:aws:iam::827478161993:role/devops-g1-codebuild-role",
+  "tags": [
+    { "key": "Project", "value": "devops-mentorship" },
+    { "key": "Group", "value": "group-1" },
+    { "key": "Owner", "value": "dispatch-service-owner" },
+    { "key": "Environment", "value": "lab" }
+  ]
+}

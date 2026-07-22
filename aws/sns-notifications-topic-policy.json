@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Id": "devops-g1-notifications-policy",
+  "Statement": [
+    {
+      "Sid": "OwnerFullControl",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::827478161993:root" },
+      "Action": [
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:AddPermission",
+        "sns:RemovePermission",
+        "sns:DeleteTopic",
+        "sns:Subscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:827478161993:devops-g1-notifications"
+    },
+    {
+      "Sid": "AllowAwsServicesToPublish",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "events.amazonaws.com",
+          "codestar-notifications.amazonaws.com",
+          "cloudwatch.amazonaws.com"
+        ]
+      },
+      "Action": "sns:Publish",
+      "Resource": "arn:aws:sns:us-east-1:827478161993:devops-g1-notifications"
+    }
+  ]
+}
