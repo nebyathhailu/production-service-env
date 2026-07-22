@@ -38,6 +38,7 @@ docker compose start matching-service       # recovers immediately, no other ste
 docker compose restart ride-api
 ```
 
+
 **Shut everything down**
 ```
 docker compose down                  # stop and remove containers + network
