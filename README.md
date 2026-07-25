@@ -93,6 +93,7 @@ Required repository configuration:
 - Secret `DOCKERHUB_TOKEN`
 
 ### Latest deployed version
+Test deployment change 
 
 Commit:
 `67f4d40cbbefcbe2810676df3dff3cbcc7b53c6e`
