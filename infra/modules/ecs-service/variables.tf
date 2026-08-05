@@ -62,11 +62,6 @@ variable "execution_role_arn" {
   type = string
 }
 
-variable "task_role_arn" {
-  description = "Per-service task role. Must include ssmmessages:* for ECS Exec (scar-log Entry 2 from the prior assignment)."
-  type        = string
-}
-
 variable "ingress_source_sg_ids" {
   description = <<-EOT
     Security-group IDs allowed to reach this service's container_port. This is the

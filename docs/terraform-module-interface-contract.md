@@ -6,6 +6,12 @@ the actual code in `infra/modules/ecs-service`, `infra/modules/ecs-platform`, an
 `infra/modules/network` as of this update — treat the code as the source of truth if this doc
 ever drifts.
 
+**Task role note:** each `ecs-service` instance creates and manages its own task role
+internally — it is not an input variable. This matches the reasoning in scar-log Entry 2 from the
+prior console-built assignment: ECS Exec's `ssmmessages:*` permissions must live on the task
+role, and every service needs them unconditionally, so the module creates one per instance rather
+than requiring each service owner to build their own role externally and pass it in.
+
 ## 1. `modules/ecs-platform` — outputs consumed by every `ecs-service` instance
 
 | Output | Type | Source |
@@ -38,7 +44,6 @@ ever drifts.
 | `service_connect_namespace_arn` | string | from `modules/ecs-platform` |
 | `subnet_ids` | list(string) | the two **private** subnet IDs from `modules/network` |
 | `execution_role_arn` | string | from `modules/ecs-platform` (shared, see §1 above) |
-| `task_role_arn` | string | per-service, created by each service owner's own instantiation (ECS Exec permissions differ per service's real needs) |
 | `ingress_source_sg_ids` | list(string) | the SG handshake — see §5 below |
 | `environment` | map(string) | **added per Nebyat's review catch** — per-service container env vars. Every service needs at least `BIND_HOST = "0.0.0.0"`. dispatch-service additionally needs `RIDE_API_URL = "http://ride-api:3001"` for the C->A callback. Set per-instance in `environments/lab/main.tf`, not hardcoded in the module. |
 | `assign_public_ip` | bool | hardcoded `false` inside the module — not a real override |
