@@ -1,0 +1,18 @@
+# Never commit state, plans, or local provider caches — see assignment safety red lines
+# ("state committed to Git" invalidates the submission) and docs/terraform-gate1-design.md §7.
+
+**/.terraform/
+**/.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+tfplan
+tfplan.json
+*.tfplan
+crash.log
+crash.*.log
+
+# Never commit variable files that might carry secrets
+*.tfvars
+*.tfvars.json
+!example.tfvars
