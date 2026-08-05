@@ -3,7 +3,7 @@ variable "name_prefix" {
 }
 
 variable "namespace_name" {
-  description = "Service Connect namespace name, e.g. devops-g1-iac.internal (Gate 1 §5 — verified live, no collision with existing group1.internal)"
+  description = "Service Connect namespace name, e.g. devops-g1-iac.internal (verified live against the existing environment — see Gate 1 doc §5)"
   type        = string
 }
 
