@@ -70,9 +70,8 @@ module "service_a_ride_api" {
   }
 
   # ALB's SG is the public entry point; Service C's SG covers the C->A callback leg
-  # (docs/terraform-gate1-design.md §4). Service C isn't written yet, so this list currently
-  # has just the ALB — Nebyat's SG output gets added here once his instance exists.
-  ingress_source_sg_ids = [module.alb.alb_security_group_id]
+  # (docs/terraform-gate1-design.md §4).
+  ingress_source_sg_ids = [module.alb.alb_security_group_id, module.service_c_dispatch.security_group_id]
 
   register_with_alb    = true
   alb_target_group_arn = module.alb.target_group_arn

@@ -56,27 +56,38 @@ resource "aws_security_group" "this" {
   description = "Inbound ${var.container_port} only from explicitly allowed security groups"
   vpc_id      = data.aws_subnet.first.vpc_id
 
-  dynamic "ingress" {
-    for_each = var.ingress_source_sg_ids
-    content {
-      description     = "Allowed source per traffic contract"
-      from_port       = var.container_port
-      to_port         = var.container_port
-      protocol        = "tcp"
-      security_groups = [ingress.value]
-    }
-  }
-
-  egress {
-    description = "All outbound - needed for ECR/CloudWatch/SSM via VPC endpoints and calls to downstream services"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  # Ingress/egress live in SEPARATE rule resources below, NOT inline blocks. Inline
+  # rules make aws_security_group.this depend on the source SG ids, which creates a
+  # Terraform dependency cycle once the C->A callback closes the A->B->C->A loop
+  # (caught by `tofu validate` in Cycle 1). Separate rule resources decouple SG
+  # creation from the source ids: all SGs create first, then all the rules.
   tags = merge(var.tags, {
     Name = "devops-g1-iac-${var.service_name}-sg"
+  })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "from_source" {
+  for_each                     = toset(var.ingress_source_sg_ids)
+  security_group_id            = aws_security_group.this.id
+  referenced_security_group_id = each.value
+  from_port                    = var.container_port
+  to_port                      = var.container_port
+  ip_protocol                  = "tcp"
+  description                  = "Allowed source per traffic contract"
+
+  tags = merge(var.tags, {
+    Name = "devops-g1-iac-${var.service_name}-ingress"
+  })
+}
+
+resource "aws_vpc_security_group_egress_rule" "all" {
+  security_group_id = aws_security_group.this.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  description       = "All outbound - ECR/CloudWatch/SSM via VPC endpoints + downstream calls"
+
+  tags = merge(var.tags, {
+    Name = "devops-g1-iac-${var.service_name}-egress"
   })
 }
 
