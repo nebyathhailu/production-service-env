@@ -33,3 +33,51 @@ module "alb" {
 # The three modules/ecs-service instances (Service A/B/C) are added here once each service
 # owner's instantiation is ready — this keeps the first apply small and reviewable, per the
 # Gate 1 approval note, and lets Rigbe/Nebyat PR their own instances independently.
+
+# Existing, shared ECR repository — read-only. This assignment's Terraform never creates,
+# modifies, or deletes any of the three existing repos. See docs/terraform-gate1-design.md §8
+# for the full reasoning and the (a)-vs-(b) decision this resolved.
+data "aws_ecr_repository" "ride_api" {
+  name = "devops-g1-ride-api"
+}
+
+variable "service_a_image_tag" {
+  description = "Git-SHA-tagged image already pushed to the existing devops-g1-ride-api repo by its existing CI pipeline"
+  type        = string
+}
+
+module "service_a_ride_api" {
+  source = "../../modules/ecs-service"
+
+  service_name   = "ride-api"
+  container_port = 3001
+  desired_count  = 2 # only publicly reachable service — needs a live standby (Gate 1 §1)
+  cpu            = 256
+  memory         = 512
+
+  image_tag          = var.service_a_image_tag
+  ecr_repository_url = data.aws_ecr_repository.ride_api.repository_url
+
+  cluster_id                    = module.ecs_platform.cluster_id
+  cluster_name                  = module.ecs_platform.cluster_name
+  service_connect_namespace_arn = module.ecs_platform.service_connect_namespace_arn
+  execution_role_arn            = module.ecs_platform.execution_role_arn
+
+  subnet_ids = module.network.private_subnet_ids
+
+  environment = {
+    BIND_HOST = "0.0.0.0"
+  }
+
+  # ALB's SG is the public entry point; Service C's SG covers the C->A callback leg
+  # (docs/terraform-gate1-design.md §4). Service C isn't written yet, so this list currently
+  # has just the ALB — Nebyat's SG output gets added here once his instance exists.
+  ingress_source_sg_ids = [module.alb.alb_security_group_id]
+
+  register_with_alb    = true
+  alb_target_group_arn = module.alb.target_group_arn
+
+  tags = {
+    Owner = "service-a-owner"
+  }
+}

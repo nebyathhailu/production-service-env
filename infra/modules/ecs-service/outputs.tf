@@ -3,18 +3,18 @@
 
 output "security_group_id" {
   description = "Consumed by whichever service is downstream of this one in the traffic contract"
-  value       = null # TODO: wire to the real aws_security_group resource once written
+  value       = aws_security_group.this.id
 }
 
 output "service_connect_discovery_name" {
   description = "Confirms Service Connect wiring matches what callers expect"
-  value       = null # TODO
+  value       = var.service_name
 }
 
 output "ecs_service_name" {
-  value = null # TODO
+  value = aws_ecs_service.this.name
 }
 
 output "task_definition_arn" {
-  value = null # TODO
+  value = aws_ecs_task_definition.this.arn
 }
