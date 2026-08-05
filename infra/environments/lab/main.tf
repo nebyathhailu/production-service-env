@@ -113,6 +113,10 @@ module "service_b_matching_service" {
 
   environment = {
     BIND_HOST = "0.0.0.0"
+    # App default falls back to "dispatch-service.internal:3003", which the Service Connect
+    # discovery name (bare "dispatch-service") does not match — must be set explicitly or
+    # this hits the exact DNS-resolution scar already documented from the console build.
+    DISPATCH_SERVICE_URL = "http://dispatch-service:3003"
   }
 
   # Service B only accepts traffic from Service A, per the traffic contract (Gate 1 §4).
