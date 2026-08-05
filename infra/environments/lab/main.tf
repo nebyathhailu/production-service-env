@@ -81,3 +81,44 @@ module "service_a_ride_api" {
     Owner = "service-a-owner"
   }
 }
+
+# Existing, shared ECR repository — read-only, same reasoning as ride-api's data source above.
+data "aws_ecr_repository" "matching_service" {
+  name = "devops-g1-matching-service"
+}
+
+variable "service_b_image_tag" {
+  description = "Git-SHA-tagged image already pushed to the existing devops-g1-matching-service repo by its existing CI pipeline"
+  type        = string
+}
+
+module "service_b_matching_service" {
+  source = "../../modules/ecs-service"
+
+  service_name   = "matching-service"
+  container_port = 3002
+  desired_count  = 1
+  cpu            = 256
+  memory         = 512
+
+  image_tag          = var.service_b_image_tag
+  ecr_repository_url = data.aws_ecr_repository.matching_service.repository_url
+
+  cluster_id                    = module.ecs_platform.cluster_id
+  cluster_name                  = module.ecs_platform.cluster_name
+  service_connect_namespace_arn = module.ecs_platform.service_connect_namespace_arn
+  execution_role_arn            = module.ecs_platform.execution_role_arn
+
+  subnet_ids = module.network.private_subnet_ids
+
+  environment = {
+    BIND_HOST = "0.0.0.0"
+  }
+
+  # Service B only accepts traffic from Service A, per the traffic contract (Gate 1 §4).
+  ingress_source_sg_ids = [module.service_a_ride_api.security_group_id]
+
+  tags = {
+    Owner = "service-b-owner"
+  }
+}
