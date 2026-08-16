@@ -1,0 +1,57 @@
+# Readiness-gated reverse proxy (C4 wiring).
+#
+# A not-ready instance receives no application traffic: every business request
+# is gated behind an internal subrequest to /readyz (auth_request). When the app
+# is not ready it returns 503; the gate then denies the request and nginx serves
+# a clean 503 instead of proxying to the app. /healthz and /readyz themselves
+# pass straight through so probes can observe real state.
+
+upstream app_upstream {
+    server 127.0.0.1:${app_port} max_fails=3 fail_timeout=10s;
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    # Liveness — is the process up? Straight through.
+    location = /healthz {
+        proxy_pass http://app_upstream/healthz;
+    }
+
+    # Readiness — 503 when DB unreachable / pool saturated / secret unresolved.
+    location = /readyz {
+        proxy_pass http://app_upstream/readyz;
+    }
+
+    location = /metrics {
+        proxy_pass http://app_upstream/metrics;
+    }
+
+    # Business traffic: only served when the readiness subrequest succeeds.
+    location / {
+        auth_request /_readyz_gate;
+        proxy_pass http://app_upstream;
+        proxy_set_header Host       $host;
+        proxy_set_header X-Real-IP  $remote_addr;
+        proxy_set_header X-Request-Id $request_id;
+    }
+
+    # Internal readiness probe used by auth_request above.
+    location = /_readyz_gate {
+        internal;
+        proxy_pass http://app_upstream/readyz;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+    }
+
+    # A failed/unready subrequest surfaces as 500 from auth_request; map it to a
+    # clean 503 so callers see "not ready", not a proxy error. 503 is
+    # deliberately NOT in this list: /readyz's own 503 must pass through
+    # untouched, and @unready itself returns 503 (no self-reference).
+    error_page 500 502 504 = @unready;
+    location @unready {
+        default_type text/plain;
+        return 503 "service not ready\n";
+    }
+}

@@ -1,0 +1,43 @@
+#!/bin/bash
+# =============================================================================
+# user-data — install nginx, render the readiness-gated proxy, start the app.
+#
+# SECURITY: we pass the secret ARN + DB endpoint, NEVER the secret value. On
+# real EC2 this file is readable via IMDS; on LocalStack it sits world-readable
+# at /var/lib/cloud/instances/<id>/. Same discipline either way: no plaintext
+# credential here. The app calls GetSecretValue at boot using DB_SECRET_ARN.
+# =============================================================================
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# --- nginx --------------------------------------------------------------------
+apt-get update
+apt-get install -y --no-install-recommends nginx curl
+
+cat > /etc/nginx/sites-available/app.conf <<'NGINXCONF'
+${nginx_conf}
+NGINXCONF
+ln -sf /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/default.dpkg-dist 2>/dev/null || true
+nginx -t
+(systemctl restart nginx || service nginx restart || nginx) 2>/dev/null || nginx
+
+# --- app ----------------------------------------------------------------------
+# Creds are resolved by the app from Secrets Manager at boot. We export only the
+# ARN + endpoint + non-secret service config.
+cd "${app_workdir}"
+
+export AWS_ENDPOINT_URL="${aws_endpoint_url}"
+export AWS_REGION="${aws_region}"
+export AWS_DEFAULT_REGION="${aws_region}"
+# LocalStack default credentials (account 000000000000) — not real secrets.
+export AWS_ACCESS_KEY_ID="test"
+export AWS_SECRET_ACCESS_KEY="test"
+export DB_SECRET_ARN="${secret_arn}"
+export DB_HOST="${db_endpoint}"
+export DB_PORT="${db_port}"
+%{ for k, v in app_env ~}
+export ${k}="${v}"
+%{ endfor ~}
+
+nohup ${app_start_command} > /var/log/app.log 2>&1 &
