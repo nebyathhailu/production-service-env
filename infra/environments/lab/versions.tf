@@ -9,10 +9,10 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "devops-g1-iac-tfstate"
+    bucket       = "devops-g1-iac-tfstate-new" # confirm this name is free in the new account before first apply — see infra/bootstrap/main.tf
     key          = "lab/terraform.tfstate"
     region       = "us-east-1"
-    profile      = "devops-lab"
+    profile      = "devops-lab-new"
     use_lockfile = true # OpenTofu >= 1.10 native S3 locking, no DynamoDB table needed
   }
 }
