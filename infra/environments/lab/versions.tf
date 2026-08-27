@@ -9,7 +9,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "devops-g1-iac-tfstate" # confirm this name is free in the new account before first apply — see infra/bootstrap/main.tf
+    bucket       = "devops-g1-iac-tfstate-new" # confirm this name is free in the new account before first apply — see infra/bootstrap/main.tf
     key          = "lab/terraform.tfstate"
     region       = "us-east-1"
     profile      = "devops-lab-new"

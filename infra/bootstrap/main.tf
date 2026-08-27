@@ -3,12 +3,12 @@
 # problem — see docs/terraform-gate1-design.md §7).
 #
 # This bucket must be globally unique across all of AWS, not just this account — check before
-# apply with: aws s3api head-bucket --bucket devops-g1-iac-tfstate 2>&1
+# apply with: aws s3api head-bucket --bucket devops-g1-iac-tfstate-new 2>&1
 # If that returns anything other than "Not Found" / 404, pick a different name and update here
 # AND in every environments/lab backend config that references it.
 
 resource "aws_s3_bucket" "tfstate" {
-  bucket = "devops-g1-iac-tfstate"
+  bucket = "devops-g1-iac-tfstate-new"
 }
 
 resource "aws_s3_bucket_versioning" "tfstate" {

@@ -22,7 +22,7 @@ PROFILE="devops-lab-new"
 REGION="us-east-1"
 OLD_ACCOUNT_ID="827478161993"
 BUCKET_NAME="devops-g1-iac-tfstate"
-FALLBACK_BUCKET_NAME="devops-g1-iac-tfstate-v2"
+FALLBACK_BUCKET_NAME="devops-g1-iac-tfstate-new"
 
 SERVICE_A_TAG="${1:?Usage: $0 <service_a_image_tag>  (e.g. the current ride-api Git SHA, e.g. ab4aa5d-amd64)}"
 
@@ -71,7 +71,11 @@ done
 echo ""
 
 echo "== Step 2: checking state bucket name availability =="
-if aws s3api head-bucket --bucket "$BUCKET_NAME" --profile "$PROFILE" --region "$REGION" 2>/dev/null; then
+CURRENT_BUCKET_IN_FILES=$(grep -o 'devops-g1-iac-tfstate[a-z0-9-]*' "$SCRIPT_DIR/bootstrap/main.tf" | head -1)
+if [ "$CURRENT_BUCKET_IN_FILES" != "$BUCKET_NAME" ]; then
+  echo "  Files already reference a non-default bucket name ('$CURRENT_BUCKET_IN_FILES') — leaving as-is, not re-running the fallback logic."
+  ACTUAL_BUCKET="$CURRENT_BUCKET_IN_FILES"
+elif aws s3api head-bucket --bucket "$BUCKET_NAME" --profile "$PROFILE" --region "$REGION" 2>/dev/null; then
   echo "  '$BUCKET_NAME' already exists and is reachable in this account/session — reusing it."
   ACTUAL_BUCKET="$BUCKET_NAME"
 else
