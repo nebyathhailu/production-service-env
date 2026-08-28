@@ -55,18 +55,33 @@ variable "allocated_storage" {
 
 # --- Networking ------------------------------------------------------------------
 
+variable "vpc_id" {
+  description = "VPC to build the RDS instance and its security group in. Must be the same VPC the consuming service instance runs in — pass module.network.vpc_id, never a default-VPC lookup, or the instance won't be reachable."
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "Subnets for the DB subnet group. Pass module.network.private_subnet_ids (at least two, different AZs)."
+  type        = list(string)
+}
+
 variable "ingress_cidrs" {
   description = <<-EOT
-    CIDRs allowed to reach MySQL (3306). Defaults to the default VPC's own
-    CIDR — NEVER 0.0.0.0/0 — same convention modules/service uses for its own
-    ingress_cidrs, so an app instance anywhere in the default VPC can reach
-    this database without per-instance SG wiring. modules/data is
+    CIDRs allowed to reach MySQL (3306). Defaults to the platform VPC's own
+    CIDR (var.vpc_id) — NEVER 0.0.0.0/0 — same convention modules/service uses
+    for its own ingress_cidrs, so an app instance anywhere in that VPC can
+    reach this database without per-instance SG wiring. modules/data is
     instantiated independently per teammate, with no dependency on a specific
     modules/service instance's security group, so this is intentionally a
     CIDR default rather than a tight SG-to-SG reference.
   EOT
   type        = list(string)
   default     = null
+
+  validation {
+    condition     = var.ingress_cidrs == null ? true : !contains(var.ingress_cidrs, "0.0.0.0/0")
+    error_message = "ingress_cidrs must never include 0.0.0.0/0 — MySQL must not be exposed to the internet."
+  }
 }
 
 variable "aws_region" {

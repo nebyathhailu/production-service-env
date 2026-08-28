@@ -4,10 +4,10 @@ Group-owned platform module (Assignment 2). Service-agnostic so all three of us 
 
 ## What it creates
 
-- **`aws_db_instance.this`** — MySQL, private (`publicly_accessible = false`), sized `db.t3.micro` / 20 GiB by default, in a subnet group built from the default VPC's subnets.
+- **`aws_db_instance.this`** — MySQL, private (`publicly_accessible = false`), sized `db.t3.micro` / 20 GiB by default, in a subnet group built from the **caller-supplied `vpc_id`/`subnet_ids`** (pass `module.network.vpc_id` / `module.network.private_subnet_ids` — this must be the same VPC the consuming service instance runs in, or the instance can't reach it).
 - **`random_password.db`** — the master password, generated inside this module and **never accepted as an input variable**. Nothing downstream (a `.tfvars` file, a CI log, a `plan` diff) can ever show it as a literal, because nothing ever passes it in.
 - **`aws_secretsmanager_secret` + `_version`** — the credential envelope (`host`, `port`, `username`, `password`, `dbname`) as JSON. `modules/service` receives only the secret's **ARN**; the app resolves the value itself at boot.
-- **`aws_security_group.db`** — inbound 3306 scoped to the default VPC's CIDR (**never `0.0.0.0/0`**), using separate `aws_vpc_security_group_ingress_rule`/`egress_rule` resources rather than an inline block — see "Design decisions" below for why that specific choice matters here.
+- **`aws_security_group.db`** — inbound 3306 scoped to the platform VPC's CIDR (**never `0.0.0.0/0`, enforced by a `validation` block on `ingress_cidrs`, not just documented**), using separate `aws_vpc_security_group_ingress_rule`/`egress_rule` resources rather than an inline block — see "Design decisions" below for why that specific choice matters here.
 
 ## How it satisfies the brief
 

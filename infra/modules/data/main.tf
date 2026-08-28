@@ -7,15 +7,8 @@
 # across instantiations.
 # =============================================================================
 
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
+data "aws_vpc" "this" {
+  id = var.vpc_id
 }
 
 # --- Credentials -------------------------------------------------------------
@@ -36,7 +29,7 @@ resource "random_password" "db" {
 
 resource "aws_db_subnet_group" "this" {
   name       = "${var.name_prefix}-data-subnets"
-  subnet_ids = data.aws_subnets.default.ids
+  subnet_ids = var.subnet_ids
 
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-data-subnets"
@@ -45,8 +38,8 @@ resource "aws_db_subnet_group" "this" {
 
 resource "aws_security_group" "db" {
   name        = "${var.name_prefix}-db-sg"
-  description = "Inbound MySQL (3306), scoped to the default VPC CIDR — never 0.0.0.0/0."
-  vpc_id      = data.aws_vpc.default.id
+  description = "Inbound MySQL (3306), scoped to the platform VPC CIDR — never 0.0.0.0/0."
+  vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-db-sg"
@@ -54,7 +47,7 @@ resource "aws_security_group" "db" {
 }
 
 locals {
-  db_ingress_cidrs = coalesce(var.ingress_cidrs, [data.aws_vpc.default.cidr_block])
+  db_ingress_cidrs = coalesce(var.ingress_cidrs, [data.aws_vpc.this.cidr_block])
 }
 
 # Separate rule resources, not an inline ingress/egress block on the SG —
