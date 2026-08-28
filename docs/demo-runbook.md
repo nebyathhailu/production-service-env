@@ -1,4 +1,38 @@
-# Group 1 — Live Demo Runbook (Wed 22 July)
+# Group 1 — Live Demo Runbook
+
+## Current environment (submit this) — account `240462142849`
+
+Captured 2026-08-28. Full production-readiness write-up: [production-readiness.md](production-readiness.md). Evidence: [evidence/EVIDENCE.md](evidence/EVIDENCE.md).
+
+```bash
+export AWS_PROFILE=devops-lab-new
+export AWS_REGION=us-east-1
+export AWS_PAGER=""
+export ALB=devops-g1-iac-alb-207582331.us-east-1.elb.amazonaws.com
+export CL=devops-g1-iac-cluster
+```
+
+| Owner | Service | ECS service name | Image tag |
+|---|---|---|---|
+| Meron | ride-api | `devops-g1-iac-ride-api-svc` | `15e1aea-amd64` |
+| Rigbe | matching-service | `devops-g1-iac-matching-service-svc` | `f4d49be-amd64` |
+| Nebyat | dispatch-service | `devops-g1-iac-dispatch-service-svc` | `570e4ab` |
+
+Log groups: `/ecs/devops-g1-iac-ride-api`, `/ecs/devops-g1-iac-matching-service`, `/ecs/devops-g1-iac-dispatch-service`.
+
+Quick proof:
+
+```bash
+curl -s http://$ALB/health
+curl -s -X POST http://$ALB/request-ride -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: DEMO-TRACE-001' -d '{"rider":"demo"}'
+```
+
+The rest of this file is the original **22 July console-cluster** script (account `827478161993`, cluster `devops-g1-cluster`). Identifiers below are **historical**. Re-run those beats against `$CL` / `$ALB` above, swapping `devops-g1-` → `devops-g1-iac-` and log groups `/ecs/devops-g1-iac-*`.
+
+---
+
+# Appendix — original console-cluster demo (Wed 22 July)
 
 **Region:** us-east-1 · **Account:** 827478161993 · **ALB:** `devops-g1-alb-308819154.us-east-1.elb.amazonaws.com`
 

@@ -2,7 +2,8 @@
 
 **Group number:** 1
 **Assigned AWS region:** us-east-1
-**AWS account ID:** 827478161993
+**AWS account ID (this Gate 1 draft):** 827478161993
+**Live account (migration, 2026-08-28):** 240462142849 — see [production-readiness.md](production-readiness.md)
 **Resource naming prefix:** `devops-g1-`
 **Due / live demo:** Wednesday, 5 August 2026
 **Status:** Submitted for Gate 1 review.
