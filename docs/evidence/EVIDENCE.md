@@ -1,7 +1,6 @@
 # Proof Pack — captured evidence
 
 Account `240462142849` · region `us-east-1` · profile `devops-lab-new`  
-Captured **2026-08-28**. This is the pack to submit with [production-readiness.md](../production-readiness.md).
 
 Commands below were run as shown. Output is pasted as returned (trimmed only where a stream was mostly Jaeger retry noise).
 
