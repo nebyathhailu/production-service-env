@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # required for the AWS OIDC (aws-actions/configure-aws-credentials) step in publish
 
 jobs:
   verify:
@@ -105,6 +106,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # AWS auth via GitHub OIDC (new-account migration). No long-lived keys: the job
+      # exchanges its OIDC token for the devops-g1-github-actions-role. Gated on the repo
+      # variable so this shared publish job doesn't hard-fail for other services before the
+      # account ID is configured — set vars.AWS_ACCOUNT_ID to the new account ID to enable it.
+      - name: Configure AWS credentials
+        if: vars.AWS_ACCOUNT_ID != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/devops-g1-github-actions-role
+          aws-region: us-east-1
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
