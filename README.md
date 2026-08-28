@@ -1,6 +1,16 @@
 # production-service-env
 A production-style microservices environment with Nginx reverse proxy, systemd lifecycle management, structured logging, and request tracing.
 
+## AWS lab (current submission)
+
+Greenfield ECS Fargate in account **`240462142849`**, region `us-east-1`, OpenTofu under `infra/`.
+
+- Production readiness: [`docs/production-readiness.md`](docs/production-readiness.md)
+- Captured evidence: [`docs/evidence/EVIDENCE.md`](docs/evidence/EVIDENCE.md)
+- Demo commands: [`docs/demo-runbook.md`](docs/demo-runbook.md)
+
+Public URL: `http://devops-g1-iac-alb-207582331.us-east-1.elb.amazonaws.com` (`/health`, `POST /request-ride`).
+
 ## Running with Docker Compose
 
 Everything below this section documents the original VM/systemd deployment. There's also a fully containerized version on the `feature/docker-compose` branch (`docker-compose.yml`, `services/*/Dockerfile`, `nginx/docker-compose.conf`) that preserves the same properties - Nginx as the only public entry point, matching-service/dispatch-service internal-only, the same ride-api → matching-service → dispatch-service → ride-api flow, structured logs, and request tracing - just running under Docker instead of systemd on a VM. See `docs/CONTAINER_VALIDATION.md` for full command-by-command proof it works.
