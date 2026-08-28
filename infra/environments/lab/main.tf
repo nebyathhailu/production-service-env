@@ -67,6 +67,9 @@ module "service_a_ride_api" {
 
   environment = {
     BIND_HOST = "0.0.0.0"
+    # App default is matching-service.internal:3002, which Service Connect does not
+    # resolve (same DNS scar as B/C). Must match the discovery name "matching-service".
+    MATCHING_SERVICE_URL = "http://matching-service:3002"
   }
 
   # ALB's SG is the public entry point; Service C's SG covers the C->A callback leg
